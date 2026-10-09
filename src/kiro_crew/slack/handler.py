@@ -225,6 +225,8 @@ from kiro_crew.slack.handler_runtime.access import (  # noqa: F401
     is_slack_session_trusted,
     is_tracked_channel,
     is_yolo_mode,
+    set_account_authz,
+    clear_account_authz,
     set_allowed_users,
     set_dashboard_state,
     set_open_channels,
@@ -655,6 +657,15 @@ _owner_id: str = ""
 # Tracked channel IDs for member_joined_channel monitoring.
 _tracking_channels: set[str] = set()
 _open_channels: set[str] = set()
+
+# Multi-workspace (phase 3b): per-account authorization registry, keyed by
+# account_id. Each value is {"owner_id": str, "allowed_users": set[str]}. The
+# 'default' account is NOT stored here — it keeps using the _owner_id /
+# _allowed_users globals above, so every existing single-workspace call site is
+# byte-for-byte unchanged. Named workspaces (slack.accounts) register their own
+# owner + allow-list here, and the account-aware predicates read this map so an
+# owner of one workspace has no authority over another.
+_account_authz: dict[str, dict[str, object]] = {}
 
 # Live reference to the orchestrator's config — set by events.py, reloaded
 # after !channel writes so activation changes take effect immediately.

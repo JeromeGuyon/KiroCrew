@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         _SLACK_OWNED_FIELDS,
         KiroCrewConfig,
         SessionManager,
+        _account_authz,
         _add_trusted_session,
         _background_tasks,
         _dashboard_state,
@@ -177,13 +178,27 @@ def _reload_orch_cfg(fresh: "KiroCrewConfig | None" = None) -> None:
         _orch_cfg.slack_dm_activation = fresh.slack_dm_activation
 
 
-def is_owner(user_id: str) -> bool:
-    """Check if *user_id* is the primary owner (with W/U prefix cross-match)."""
-    if not _owner_id or not user_id:
+def is_owner(user_id: str, account_id: str | None = None) -> bool:
+    """Check if *user_id* is the primary owner (with W/U prefix cross-match).
+
+    *account_id* selects which workspace's owner to check. ``None`` or
+    ``"default"`` uses the top-level ``_owner_id`` global (every existing call
+    site, unchanged). A named workspace checks the owner registered for it in
+    ``_account_authz``; an unknown account authorizes no one (fail-closed), so
+    an owner of one workspace is never an owner of another.
+    """
+    if account_id is not None and account_id != "default":
+        entry = _account_authz.get(account_id)
+        if not entry:
+            return False
+        owner = str(entry.get("owner_id") or "")
+    else:
+        owner = _owner_id
+    if not owner or not user_id:
         return False
-    if user_id == _owner_id:
+    if user_id == owner:
         return True
-    return user_id.replace("W", "U", 1) == _owner_id or user_id.replace("U", "W", 1) == _owner_id
+    return user_id.replace("W", "U", 1) == owner or user_id.replace("U", "W", 1) == owner
 
 
 def disable_yolo() -> None:
@@ -242,7 +257,7 @@ def add_trusted_session(
     _add_trusted_session(session_key, sessions, strict=strict)
 
 
-def is_allowed_user(user_id: str) -> bool:
+def is_allowed_user(user_id: str, account_id: str | None = None) -> bool:
     """Check if *user_id* may drive the native Slack path.
 
     Authorized when the user is the owner OR an explicitly approved member of the
@@ -251,6 +266,11 @@ def is_allowed_user(user_id: str) -> bool:
     Allow/Deny prompts). The owner is always authorized even when absent from the
     set.
 
+    *account_id* selects the workspace. ``None`` / ``"default"`` uses the
+    top-level globals (every existing call site, unchanged). A named workspace
+    checks that workspace's own owner + allow-list from ``_account_authz`` only,
+    so allow-list membership on one workspace grants nothing on another.
+
     This is the general invocation gate. Owner-only privileges (global YOLO,
     per-session Trust grants, dashboard-link minting, tracking-channel changes)
     remain gated on :func:`is_owner` at their own call sites and are NOT widened
@@ -258,7 +278,37 @@ def is_allowed_user(user_id: str) -> bool:
     """
     if not user_id:
         return False
+    if account_id is not None and account_id != "default":
+        if is_owner(user_id, account_id):
+            return True
+        entry = _account_authz.get(account_id)
+        if not entry:
+            return False
+        allowed = entry.get("allowed_users")
+        return isinstance(allowed, set) and user_id in allowed
     return is_owner(user_id) or user_id in _allowed_users
+
+
+def set_account_authz(account_id: str, owner_id: str, allowed_users: set[str]) -> None:
+    """Register (or replace) a named workspace's owner + allow-list.
+
+    The owner is always implicitly allowed, so it is folded into the stored
+    allow-list set here (mirroring how the default account's ``_allowed_users``
+    is seeded with the owner at boot). ``"default"`` is rejected: the top-level
+    account is governed by the ``_owner_id`` / ``_allowed_users`` globals, not by
+    this registry, so routing it here would create two sources of truth.
+    """
+    if not account_id or account_id == "default":
+        return
+    members = set(allowed_users)
+    if owner_id:
+        members.add(owner_id)
+    _account_authz[account_id] = {"owner_id": owner_id, "allowed_users": members}
+
+
+def clear_account_authz() -> None:
+    """Drop every named-workspace authz entry (default account untouched)."""
+    _account_authz.clear()
 
 
 def set_tracking_channels(channel_ids: set[str]) -> None:
