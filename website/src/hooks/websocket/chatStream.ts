@@ -6,7 +6,7 @@ import { store, type AppDispatch } from '../../store'
 import { markSlotUnread } from '../../store/dashboardSlice'
 import { sseChatMessage, appendSlotMessage, setSlotStatusDetail, sseToolActivity, queueEntryQuote } from '../../store/chatSlice'
 import { dispatchMcNotification, APPROVAL_KIND, shouldChimeOnPermissionRow } from '../notificationEvent'
-import { chatMessageMarksUnread, unreadWatermarkTs } from '../unreadOnAttention'
+import { chatMessageMarksUnread, isMemberThreadSlot, memberThreadRowMarksUnread, unreadWatermarkTs } from '../unreadOnAttention'
 import { noteUnsavedRowTs } from '../../lib/slotReadRelay'
 import { emitThemeSound } from '../themeSound'
 import { isReconcileNote } from '../../lib/noteContract'
@@ -69,8 +69,14 @@ export function useChatStream({ dispatch, buffers, voice, reconnectingRef }: Cha
       // relays later carry its ts explicitly (see noteUnsavedRowTs).
       if (data.slot && unreadWatermarkTs(data.role, data.ts) === undefined && data.ts) noteUnsavedRowTs(data.slot, data.ts)
       // The "only when done or waiting" opt-in leaves routine rows unbadged.
+      // A member DM thread badges only on a row the crewmate wrote to the
+      // user (`memberThreadRowMarksUnread`): its tool calls are its own work,
+      // not a message, so they must not light the Crewmates rail.
       attendArrival(data.slot, data.ts, reconnectingRef.current, slot => {
-        if (chatMessageMarksUnread(data.role)) {
+        const marks = isMemberThreadSlot(slot, store.getState().dashboard.slots)
+          ? memberThreadRowMarksUnread(data.role)
+          : chatMessageMarksUnread(data.role)
+        if (marks) {
           dispatch(markSlotUnread({ slot, ts: unreadWatermarkTs(data.role, data.ts), localTs: data.ts || undefined }))
         }
       })

@@ -25,6 +25,33 @@ export function chatMessageMarksUnread(role: string | undefined): boolean {
   return !loadUnreadOnAttention() || role === 'permission'
 }
 
+/** The rows a crewmate writes TO the user. A member DM thread is a
+ *  conversation with a named colleague, so its unread dot means "they said
+ *  something to you", never "they ran a tool": a crewmate working through a
+ *  long patrol would otherwise light the Crewmates rail on every tool call and
+ *  the user would open the thread to find nothing addressed to them. */
+const MEMBER_MESSAGE_ROLES: ReadonlySet<string> = new Set(['assistant', 'permission'])
+
+/** Whether a `chat_message` row badges a member DM thread (`slot.mode ===
+ *  'member'`). Narrower than `chatMessageMarksUnread`, never wider: only an
+ *  `assistant` or `permission` row qualifies, and the opt-in still applies on
+ *  top (with it on, an `assistant` row stays quiet here too). */
+export function memberThreadRowMarksUnread(role: string | undefined): boolean {
+  return role !== undefined && MEMBER_MESSAGE_ROLES.has(role) && chatMessageMarksUnread(role)
+}
+
+/** The server reserves the `member-` key prefix for member DM slots
+ *  (`slot_registry.py` refuses any other mode under it), so the prefix alone
+ *  identifies a thread whose slot row has not yet reached `dashboard.slots`. */
+const MEMBER_SLOT_KEY_PREFIX = 'member-'
+
+/** Whether *slotKey* is a member DM thread: by the slot's `mode` when the
+ *  slots list has it, else by the reserved key prefix. */
+export function isMemberThreadSlot(slotKey: string, slots: ReadonlyArray<{ key: string; mode?: string }> | undefined): boolean {
+  const entry = slots?.find(s => s.key === slotKey)
+  return entry ? entry.mode === 'member' : slotKey.startsWith(MEMBER_SLOT_KEY_PREFIX)
+}
+
 /** Roles the gateway never saves to disk (`_TRANSIENT_ROLES` in
  *  `dashboard/state.py`). A gateway restart drops these rows, so the slot's
  *  `last_ts` never again reaches their timestamps. */

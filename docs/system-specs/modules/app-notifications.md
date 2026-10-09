@@ -123,6 +123,8 @@ The detail panel's hand-off buttons ("Continue in Chat", and "View last result" 
 
 Settings › Notifications › "Mark sessions unread only when they need you" (`localStorage` key `mc-unread-on-attention`, default off, `hooks/unreadOnAttention.ts`) limits which `chat_message` rows mark a background session unread: with it on, only a `permission` row does, while a finished turn and a question card badge on their own paths. A slot's `last_ts` is its newest durable row (`slot_projection.py` skips transient roles). The unread watermark is never taken from a transient-role row, because a restarted gateway never again reports a `last_ts` that high and the badge could never clear. The client's role set (`UNSAVED_ROLES`) mirrors `dashboard/state.py` `_TRANSIENT_ROLES`; `test_to_dict_board_fields.py` pins the mirror.
 
+A member DM thread (`slot.mode === 'member'`, key prefix `member-`, which `slot_registry.py` reserves for that mode) is narrower in both modes: `memberThreadRowMarksUnread` badges it only on a row the crewmate wrote to the user, `assistant` or `permission`, with the opt-in still applied on top. Its `tool_call`, `tool_result`, `inject` and streaming rows never badge it: the Crewmates rail dot means "a crewmate said something to you", not "a crewmate ran a tool". `isMemberThreadSlot` reads the mode from `dashboard.slots` and falls back to the reserved prefix for a thread the list has not caught up to. The question-card and `chat_done` paths are unchanged.
+
 ## Plain-text previews
 
 The native notification body, feed-row preview and transcript turn minimap share
