@@ -231,7 +231,7 @@ export default function McpCustomServerModal({ open, onClose, editName }: Props)
         )}
         {editing && !!specQuery.data && Object.keys(specQuery.data.spec.headers ?? {}).length > 0 && (
           <p className="text-xs text-text m-0" role="note">
-            {i18nT('components.mcpCustomServerModal.stored_header_values_are_hidden_and_read_only')}
+            {i18nT('components.mcpCustomServerModal.stored_header_values_are_hidden')}
           </p>
         )}
 

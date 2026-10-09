@@ -198,7 +198,7 @@ describe('add mode', () => {
 // ---------------------------------------------------------------------------
 
 describe('edit mode', () => {
-  it('shows the read-only note when the loaded spec carries redacted headers', async () => {
+  it('shows the stored-headers note when the loaded spec carries redacted headers', async () => {
     mockedApi.mcpCustomGet.mockResolvedValue({
       name: 'remote',
       spec: { url: 'https://mcp.example.com/sse', headers: { Authorization: '[REDACTED: credential]' } },
@@ -206,9 +206,9 @@ describe('edit mode', () => {
     })
     renderModal({ editName: 'remote' })
 
-    // The note appears BEFORE the user invests edits — stored values are
-    // preserve-only and a modified save would 400.
-    expect(await screen.findByRole('note')).toHaveTextContent(/hidden and read-only/)
+    // The note appears BEFORE the user invests edits: it says how to keep a
+    // stored value and how to replace one.
+    expect(await screen.findByRole('note')).toHaveTextContent(/Leave a value as the placeholder to keep it/)
   })
 
   it('shows no read-only note when the spec has no stored headers', async () => {

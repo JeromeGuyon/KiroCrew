@@ -7504,7 +7504,7 @@
       "server_name_2": "Servername",
       "server_spec_json": "JSON-Spezifikation des Servers",
       "servers_json": "Server-JSON",
-      "stored_header_values_are_hidden_and_read_only": "Gespeicherte Header-Werte sind hier verborgen und schreibgeschützt. Zum Ändern den Server entfernen und neu hinzufügen – er startet deaktiviert und Ihre Tool-Einschränkungen werden nicht übernommen; wenden Sie sie danach erneut an.",
+      "stored_header_values_are_hidden": "Gespeicherte Header-Werte sind hier verborgen. Lassen Sie einen Wert als Platzhalter stehen, um ihn zu behalten, oder geben Sie einen neuen Wert ein, um ihn zu ersetzen. Um einen Header hinzuzufügen, zu entfernen oder umzubenennen oder die URL zu ändern, entfernen Sie den Server und fügen Sie ihn neu hinzu.",
       "stdio_or": "(stdio) oder",
       "that_looks_like_a_single_server_spec_give_it_a_n": "Das sieht wie die Spezifikation eines einzelnen Servers aus — geben Sie ihm einen Namen:",
       "url": "URL",

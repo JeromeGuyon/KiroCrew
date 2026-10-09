@@ -194,6 +194,28 @@ def _clean_spec(spec: dict) -> dict:
     return out
 
 
+def _merge_stored_headers(stored: dict, submitted: object) -> dict[str, str] | None:
+    """Stored headers updated by a submitted map, or ``None`` to refuse.
+
+    The names must match the stored names exactly. Per name, a value that is
+    exactly the placeholder keeps the stored value for that name, and any
+    other non-empty value without the placeholder in it replaces it. An empty
+    value, or one that only contains the placeholder, is refused: neither says
+    clearly whether the user meant to keep the value or to replace it.
+    """
+    if not isinstance(submitted, dict) or set(submitted) != set(stored):
+        return None
+    merged: dict[str, str] = {}
+    for name, value in submitted.items():
+        if value == MCP_REDACTED_HEADER_VALUE:
+            merged[name] = stored[name]
+        elif isinstance(value, str) and value and MCP_REDACTED_HEADER_VALUE not in value:
+            merged[name] = value
+        else:
+            return None
+    return merged
+
+
 def _resolve_oauth_hints(spec: dict, submitted: dict, existing: dict) -> str | None:
     """Let the submitted spec decide the OAuth hints, wire sibling included.
 
@@ -457,9 +479,12 @@ async def api_mcp_custom_update(request: web.Request) -> web.Response:
 
     ``headers`` straddles that line: an entry WITHOUT stored headers may
     author them here like a fresh add, but once values exist on disk they
-    join the carried set — reads redact header values, so accepting an
-    edit would let the redaction markers overwrite the real credentials.
-    Changing stored headers means removing and re-adding the server.
+    join the carried set — reads redact header values, so the placeholder
+    a read returns must never overwrite a real credential. A submitted value
+    that is exactly the placeholder keeps the value stored under that same
+    name; any other non-empty value replaces it. Adding, removing or
+    renaming a stored header, or changing ``url``, still means removing and
+    re-adding the server.
 
     The authorship marker is the one exception: it records that Kiro Crew
     wrote an entry into a file it does NOT own, so it has no meaning in the
@@ -518,14 +543,20 @@ async def api_mcp_custom_update(request: web.Request) -> web.Response:
         if err:
             return web.json_response({"error": err}, status=400)
         assert isinstance(submitted, dict)  # narrowed by _validate_spec
+        replaced_headers: dict[str, str] | None = None
         for key, on_disk in carried.items():
             visible_value = redact_mcp_headers(on_disk) if key == "headers" else on_disk
             if key in submitted and submitted[key] != visible_value:
                 if key == "headers":
+                    replaced_headers = _merge_stored_headers(on_disk, submitted[key])
+                    if replaced_headers is not None:
+                        continue
                     return web.json_response(
                         {
-                            "error": "stored header values are hidden and"
-                            " read-only here. To change them, remove this"
+                            "error": "stored header values are hidden here."
+                            " Leave a value as the placeholder to keep it, or"
+                            " type a new non-empty value to replace it. To"
+                            " add, remove or rename a header, remove this"
                             " server and re-add it with fresh headers — it"
                             " starts disabled and your tool restrictions"
                             " won't carry over, so re-apply them after"
@@ -559,6 +590,8 @@ async def api_mcp_custom_update(request: web.Request) -> web.Response:
             )
         spec = _clean_spec(submitted)
         spec.update(carried)  # preserved verbatim, never dropped
+        if replaced_headers is not None:
+            spec["headers"] = replaced_headers
         _oauth_err = _resolve_oauth_hints(spec, submitted, existing)
         if _oauth_err:
             return web.json_response(

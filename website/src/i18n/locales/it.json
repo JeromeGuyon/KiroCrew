@@ -7615,7 +7615,7 @@
       "server_name_2": "Nome del server",
       "server_spec_json": "JSON della specifica del server",
       "servers_json": "JSON dei server",
-      "stored_header_values_are_hidden_and_read_only": "I valori header memorizzati sono nascosti e di sola lettura qui. Per modificarli, rimuovi e aggiungi di nuovo il server: parte disabilitato e le tue restrizioni degli strumenti non vengono conservate, quindi riapplicale dopo.",
+      "stored_header_values_are_hidden": "I valori header memorizzati sono nascosti qui. Lascia un valore come segnaposto per mantenerlo, oppure scrivi un nuovo valore per sostituirlo. Per aggiungere, rimuovere o rinominare un header, o cambiare l'URL, rimuovi e aggiungi di nuovo il server.",
       "stdio_or": "(stdio) o",
       "that_looks_like_a_single_server_spec_give_it_a_n": "Sembra la specifica di un singolo server — assegnagli un nome:",
       "url": "url",
