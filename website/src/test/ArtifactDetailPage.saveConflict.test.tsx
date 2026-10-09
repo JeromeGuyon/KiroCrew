@@ -75,7 +75,7 @@ async function editAndDirty() {
     { route: '/artifacts/cr-queue' },
   )
   await waitFor(() => expect(screen.getByText('CR Queue')).toBeInTheDocument())
-  fireEvent.click(screen.getByTitle('Edit content'))
+  fireEvent.click(screen.getByRole('button', { description: 'Edit content' }))
   const editor = await screen.findByTestId('editor-stub')
   fireEvent.change(editor, { target: { value: '# v1 edited' } })
 }
@@ -178,14 +178,14 @@ function renderCrossArtifactSave(write: Promise<Artifact>) {
 
 async function beginCrossArtifactSave() {
   await screen.findByText('File A')
-  fireEvent.click(screen.getByTitle('Edit content'))
+  fireEvent.click(screen.getByRole('button', { description: 'Edit content' }))
   fireEvent.change(await screen.findByTestId('editor-stub'), { target: { value: '# file a edited' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save' }))
   await waitFor(() => expect(saveCalls()).toHaveLength(1))
 
   fireEvent.click(screen.getByRole('button', { name: 'go to store-b' }))
   await screen.findByText('Store B')
-  fireEvent.click(screen.getByTitle('Edit content'))
+  fireEvent.click(screen.getByRole('button', { description: 'Edit content' }))
   fireEvent.change(await screen.findByTestId('editor-stub'), { target: { value: '# store b edited' } })
 }
 
