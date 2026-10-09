@@ -2059,7 +2059,7 @@ async def _dispatch_queued(
     try:
         if _use_transport:
             await handle_message_transport(
-                orch.slack,  # type: ignore[arg-type]
+                orch.slack_for(kwargs.get("account_id", "default")),  # type: ignore[arg-type]  # phase 3d
                 orch.sessions,  # type: ignore[arg-type]
                 channel,
                 text,
@@ -2093,7 +2093,7 @@ async def _dispatch_queued(
             )
             return
         await handle_message(
-            orch.slack,  # type: ignore[arg-type]
+            orch.slack_for(kwargs.get("account_id", "default")),  # type: ignore[arg-type]  # phase 3d
             orch.sessions,  # type: ignore[arg-type]
             channel,
             text,
@@ -3204,6 +3204,7 @@ async def _route_message(
             # Historical key; carries every attachment temp path for cleanup.
             image_temp_paths=list(_attachment_temp_paths),
             from_trusted_bot=from_trusted_bot,
+            account_id=account_id,
             **_queue_tags(sender_id, channel),
         )
         if not _queued:
@@ -3223,6 +3224,7 @@ async def _route_message(
                         user_display_name=_sender_display,
                         image_temp_paths=list(_attachment_temp_paths),
                         from_trusted_bot=from_trusted_bot,
+                        account_id=account_id,
                         **_queue_tags(sender_id, channel),
                     ),
                 )
@@ -3251,6 +3253,7 @@ async def _route_message(
         user_display_name=_sender_display,
         image_temp_paths=list(_attachment_temp_paths),
         from_trusted_bot=from_trusted_bot,
+        account_id=account_id,
         **_queue_tags(sender_id, channel),
     ):
         logger.info("Message %s queued for busy session %s", msg_ts, session_key)
@@ -3371,7 +3374,7 @@ async def _route_message(
     try:
         t = asyncio.create_task(
             handle_message(
-                orch.slack,  # type: ignore[arg-type]
+                orch.slack_for(account_id),  # type: ignore[arg-type]  # phase 3d: reply via the delivering workspace's bot
                 orch.sessions,  # type: ignore[arg-type]
                 channel,
                 clean_text,
