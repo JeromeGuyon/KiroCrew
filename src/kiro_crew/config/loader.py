@@ -518,6 +518,26 @@ def jira_host_token_name(host: str) -> str:
     return f"JIRA_TOKEN_{normalized.encode().hex().upper()}"
 
 
+# Per-account Slack tokens use a hex-encoded account-id suffix, exactly like
+# the Jira per-host pattern above: SLACK_BOT_TOKEN__<HEX> / SLACK_APP_TOKEN__<HEX>.
+# Hex encoding keeps the env-var name valid (an account id may contain '-',
+# which is illegal in a POSIX env name) and collision-free. Only hex chars are
+# accepted so a forged key name injected via a multiline env value cannot reach
+# the credential path.
+_SLACK_BOT_TOKEN_ACCT_RE = _re.compile(r"^SLACK_BOT_TOKEN__[0-9A-Fa-f]+$")
+_SLACK_APP_TOKEN_ACCT_RE = _re.compile(r"^SLACK_APP_TOKEN__[0-9A-Fa-f]+$")
+
+
+def slack_account_bot_token_name(account_id: str) -> str:
+    """Per-account Slack BOT token env name for *account_id* (hex-suffixed)."""
+    return f"SLACK_BOT_TOKEN__{account_id.encode().hex().upper()}"
+
+
+def slack_account_app_token_name(account_id: str) -> str:
+    """Per-account Slack APP token env name for *account_id* (hex-suffixed)."""
+    return f"SLACK_APP_TOKEN__{account_id.encode().hex().upper()}"
+
+
 def jira_global_token_applicable(entries: Iterable[JiraAuthEntry]) -> bool:
     """Whether the global Jira token may serve one valid configured host."""
     raw_entries = list(entries)
@@ -4605,7 +4625,17 @@ class KiroCrewConfig:
             # settings), but the warning makes the behavior visible rather than
             # silently surprising.  The encrypted vault (PR 1+) will provide a
             # proper agent-isolated path for secrets.
-            unknown = set(creds) - set(CREDENTIAL_KEYS) - _warned_env_keys
+            # Per-host Jira and per-account Slack tokens are recognised
+            # credentials with their own suffix patterns, so they must not warn.
+            def _is_recognised_cred(k: str) -> bool:
+                return (
+                    k in CREDENTIAL_KEYS
+                    or bool(_JIRA_TOKEN_RE.match(k))
+                    or bool(_SLACK_BOT_TOKEN_ACCT_RE.match(k))
+                    or bool(_SLACK_APP_TOKEN_ACCT_RE.match(k))
+                )
+
+            unknown = {k for k in creds if not _is_recognised_cred(k)} - _warned_env_keys
             if unknown:
                 _warned_env_keys.update(unknown)
                 for uk in sorted(unknown):
@@ -4642,11 +4672,56 @@ class KiroCrewConfig:
             for k, v in creds.items():
                 if not v:
                     continue
-                if scrubbed and (k in CREDENTIAL_KEYS or _JIRA_TOKEN_RE.match(k)):
+                if scrubbed and (
+                    k in CREDENTIAL_KEYS
+                    or _JIRA_TOKEN_RE.match(k)
+                    or _SLACK_BOT_TOKEN_ACCT_RE.match(k)
+                    or _SLACK_APP_TOKEN_ACCT_RE.match(k)
+                ):
                     continue
                 os.environ.setdefault(k, v)
 
         return creds
+
+    def resolve_slack_account(
+        self, account_id: str, creds: dict[str, str] | None = None
+    ) -> dict[str, str]:
+        """Resolve one Slack workspace's effective credentials + owner.
+
+        Returns ``{"bot_token", "app_token", "owner_id"}`` for *account_id*.
+        ``"default"`` is the implicit top-level account (``slack.bot_token`` /
+        ``app_token`` and the gateway owner). Any other id resolves against
+        ``slack.accounts[account_id]``, with each token taken from the
+        per-account credential first (``SLACK_BOT_TOKEN__<hex>`` /
+        ``SLACK_APP_TOKEN__<hex>``) and falling back to the value stored on the
+        account config. The owner falls back to the gateway owner when the
+        account does not set its own, so an account always has an owner.
+
+        *creds* may be passed to avoid re-reading ``.env``; omitted, it is
+        loaded without propagating into the environment.
+        """
+        if creds is None:
+            creds = self.load_credentials(propagate=False)
+        if account_id == "default":
+            # The top-level account's tokens live ONLY in credentials
+            # (SlackConfig carries no bot_token/app_token field); the owner is
+            # the gateway owner.
+            return {
+                "bot_token": creds.get(CRED_SLACK_BOT_TOKEN, ""),
+                "app_token": creds.get(CRED_SLACK_APP_TOKEN, ""),
+                "owner_id": creds.get(CRED_OWNER_ID, ""),
+            }
+        acct = self.slack.accounts.get(account_id)
+        if acct is None:
+            return {"bot_token": "", "app_token": "", "owner_id": ""}
+        global_owner = creds.get(CRED_OWNER_ID, "")
+        return {
+            "bot_token": creds.get(slack_account_bot_token_name(account_id), "")
+            or acct.bot_token,
+            "app_token": creds.get(slack_account_app_token_name(account_id), "")
+            or acct.app_token,
+            "owner_id": acct.owner_id or global_owner,
+        }
 
     def create_provider_factory(self) -> Callable:
         """Return a factory that creates LLMProvider instances from config.

@@ -83,6 +83,18 @@ from kiro_crew.subprocess_utf8 import UTF8_TEXT
 _CRON_ENV_DENY: frozenset[str] = frozenset({"KIROCREW_INTERNAL_SECRET", *_AGENT_DENIED_ENV_KEYS})
 
 
+def _is_slack_account_token_key(key: str) -> bool:
+    """True for a per-account Slack token env var (SLACK_BOT/APP_TOKEN__<HEX>).
+
+    _CRON_ENV_DENY tests exact membership, so the multi-workspace per-account
+    tokens (loader.slack_account_bot_token_name / _app_token_name) would slip
+    through it. They share the base families' prefixes, which the sandbox
+    startswith-scrub already covers; this closes the exact-membership cron path
+    the same way.
+    """
+    return key.startswith("SLACK_BOT_TOKEN__") or key.startswith("SLACK_APP_TOKEN__")
+
+
 #: Env-var names carrying operator-granted vault secrets IN THIS PROCESS.
 #: Empty in the gateway; the granted-run launcher seeds it right after
 #: applying the grant to ``os.environ``, so every descendant this process
@@ -103,7 +115,9 @@ def _clean_cron_env() -> dict[str, str]:
     env = {
         k: v
         for k, v in os.environ.items()
-        if k not in _CRON_ENV_DENY and k not in _GRANTED_ENV_KEYS
+        if k not in _CRON_ENV_DENY
+        and k not in _GRANTED_ENV_KEYS
+        and not _is_slack_account_token_key(k)
     }
     present = [k for k in CANONICAL_TEMP_KEYS if k in env]
     if present:
