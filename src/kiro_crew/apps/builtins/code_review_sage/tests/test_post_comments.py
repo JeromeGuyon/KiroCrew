@@ -542,6 +542,91 @@ class TestGroupedPost(_Base):
         self.assertEqual(self.dispatched, [])
 
 
+class TestDismissFinding(_Base):
+    """A finding can be dismissed with a reason, and is then never posted."""
+
+    async def asyncSetUp(self):
+        routes._RUNS.clear()
+        self._save = unittest.mock.patch.object(routes, "_save_runs",
+                                                unittest.mock.AsyncMock())
+        self._save.start()
+        self.addCleanup(self._save.stop)
+
+    def _run(self, **over) -> dict:
+        run = {
+            "run_id": "run-d", "repo": "o/r",
+            "changes": ["https://github.com/o/r/pull/1"],
+            "change_ids": ["CR-1"], "status": "done",
+            "started_at": "2026-01-01T00:00:00Z",
+            "finished_at": "2026-01-01T00:05:00Z",
+            **over,
+        }
+        routes._RUNS.append(run)
+        return run
+
+    async def _dismiss(self, body: dict) -> web.Response:
+        return await routes._handle_run_dismiss(
+            _FakeRequest("run-d", body))  # type: ignore[arg-type]
+
+    async def test_the_reason_is_stored_on_the_run(self):
+        run = self._run()
+        resp = await self._dismiss({"change_id": "CR-1", "key": "finding:1",
+                                    "reason": "  false positive  "})
+        self.assertEqual(resp.status, 200)
+        entry = run["dismissed"]["CR-1"]["finding:1"]
+        self.assertEqual(entry["reason"], "false positive")
+        self.assertTrue(entry["at"])
+
+    async def test_undo_removes_the_dismissal(self):
+        run = self._run(dismissed={"CR-1": {"finding:1": {"reason": "x", "at": "t"}}})
+        resp = await self._dismiss({"change_id": "CR-1", "key": "finding:1",
+                                    "dismissed": False})
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(run["dismissed"], {})
+
+    async def test_a_dismissed_finding_is_not_counted_or_posted(self):
+        results.write_result(_record(), None, "run-d")
+        run = self._run()
+        await self._dismiss({"change_id": "CR-1", "key": "finding:0", "reason": "no"})
+        n = await asyncio.to_thread(routes._pending_comment_count, "run-d", run)
+        # 1 red + 2 yellow + ship = 4, minus the dismissed red.
+        self.assertEqual(n, 3)
+        everything = routes._without_dismissed("run-d", run, "CR-1", None)
+        self.assertNotIn("finding:0", everything)
+        self.assertIn("finding:1", everything)
+        picked = routes._without_dismissed("run-d", run, "CR-1", ["finding:0"])
+        self.assertEqual(picked, [])
+
+    async def test_refuses_what_is_not_a_finding(self):
+        self._run()
+        resp = await self._dismiss({"change_id": "CR-1", "key": "ship"})
+        self.assertEqual(resp.status, 400)
+
+    async def test_refuses_an_unknown_change(self):
+        self._run()
+        resp = await self._dismiss({"change_id": "CR-9", "key": "finding:0",
+                                    "reason": "no"})
+        self.assertEqual(resp.status, 404)
+
+    async def test_refuses_a_finding_already_on_the_pull_request(self):
+        self._run(posted_keys={"CR-1": ["finding:0"]})
+        resp = await self._dismiss({"change_id": "CR-1", "key": "finding:0",
+                                    "reason": "no"})
+        self.assertEqual(resp.status, 409)
+
+    async def test_refuses_a_dismissal_without_a_reason(self):
+        self._run()
+        resp = await self._dismiss({"change_id": "CR-1", "key": "finding:0",
+                                    "reason": "   "})
+        self.assertEqual(resp.status, 400)
+
+    async def test_refuses_an_overlong_reason(self):
+        self._run()
+        resp = await self._dismiss({"change_id": "CR-1", "key": "finding:0",
+                                    "reason": "x" * 501})
+        self.assertEqual(resp.status, 400)
+
+
 class _FakeRequest(OwnerRequest):
     """Minimal stand-in: the handler only reads match_info, query and json()."""
 

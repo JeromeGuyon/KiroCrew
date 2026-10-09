@@ -254,3 +254,40 @@ describe('ShipSummaryCard control grouping', () => {
     expect(screen.getByText('Select for bulk draft')).toBeTruthy()
   })
 })
+
+describe('FindingCard dismissal', () => {
+  it('asks for a reason and sends it', async () => {
+    const onDismiss = vi.fn(() => Promise.resolve())
+    render(<FindingCard finding={finding()} onPost={() => {}} onDismiss={onDismiss} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    const confirm = screen.getByRole('button', { name: 'Dismiss finding' }) as HTMLButtonElement
+    // No reason, no dismissal: the reason is the whole point of the action.
+    expect(confirm.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Why dismiss this finding?'),
+      { target: { value: '  false positive ' } })
+    fireEvent.click(confirm)
+    expect(onDismiss).toHaveBeenCalledWith('false positive')
+  })
+
+  it('shows the reason and offers undo instead of posting once dismissed', () => {
+    const onDismiss = vi.fn(() => Promise.resolve())
+    render(
+      <FindingCard
+        finding={finding()}
+        selectable
+        dismissed={{ reason: 'out of scope', at: '2026-01-01T00:00:00Z' }}
+        onDismiss={onDismiss}
+      />,
+    )
+    expect(screen.getByText('Dismissed: out of scope')).toBeTruthy()
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Draft this finding/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    expect(onDismiss).toHaveBeenCalledWith(null)
+  })
+
+  it('offers no dismissal for a finding already on the pull request', () => {
+    render(<FindingCard finding={finding()} posted onDismiss={() => Promise.resolve()} />)
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull()
+  })
+})
