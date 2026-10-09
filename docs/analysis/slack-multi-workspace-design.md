@@ -68,6 +68,46 @@ SlackAccountConfig:
 - Tests: résolution per-account, absence silencieuse d'un compte mal configuré.
 
 ### Phase 3 — Connexions multiples (`_hoist_slack`)
+
+> **RÉVISION POST-AUDIT (2026-10-09) — cohérence d'ensemble.**
+> Phases 1 et 2 **livrées et testées** (commits `475a4d4d0`, `50be3fa15`).
+> L'audit du cœur du gateway révèle le point structurant que le plan initial
+> sous-estimait : **toute l'autorisation Slack repose sur des GLOBALS DE MODULE**
+> dans `handler_runtime/access.py` (`_allowed_users`, `_owner_id`, `_orch_cfg`,
+> `_dashboard_state`), posés UNE SEULE FOIS au boot via `set_allowed_users()` /
+> `set_owner_id()` / `set_orch_cfg()` depuis `events.py`. Le listener `_on_event`
+> (events.py:1075+) fait tout en s'appuyant dessus : ACK, check owner, YOLO,
+> validation enterprise, routage.
+>
+> **Conséquence sur l'ordre.** On NE PEUT PAS monter N sockets avant de rendre
+> ces globals indexés par compte : sinon le dernier compte monté écraserait
+> l'owner/allow-list des autres → élévation cross-workspace silencieuse. La
+> Phase 5 (isolation d'autorisation) est donc un **prérequis** de la Phase 3,
+> pas une suite. Réordonnancement :
+>
+> - **3a (fondation, sûre, additive).** Construire au boot
+>   `self._slack_runtime: dict[account_id, {bot_token, app_token, owner_id, team_id}]`
+>   via `resolve_slack_account()` pour `default` + chaque `accounts`. Résoudre le
+>   `team_id` de chaque compte par `auth.test` (off-loop). AUCUN changement du
+>   socket unique existant : le `default` reste câblé exactement comme aujourd'hui.
+>   Testable isolément, zéro régression runtime.
+> - **3b (= ancienne Phase 5, FAIT AVANT les sockets).** Transformer les globals
+>   d'`access.py` en registre par compte : `is_owner(uid, account_id)` /
+>   `is_allowed_user(uid, account_id)` lisent la map du compte. Garder une
+>   compat `default` pour les call-sites non encore paramétrés. Tests
+>   cross-workspace obligatoires (owner A rejeté sur compte B).
+> - **3c (sockets multiples).** Extraire `_on_event` en **factory**
+>   `make_on_event(account_id)` capturant les credentials/validateurs du compte ;
+>   remplacer `self._socket_client` par `dict[account_id, WSSocketModeClient]` ;
+>   un socket par compte avec app_token. Le `default` emprunte désormais le même
+>   chemin que les autres (dogfood du path multi-compte).
+> - **3d (routage entrant, = ancienne Phase 4).** `team_id` d'enveloppe →
+>   `account_id` (fail-closed si inconnu). Propager `account_id` dans
+>   handler/stream/interactions. Session key = `(account_id, channel, thread_ts)`.
+>
+> Les anciennes Phases 4 et 5 ci-dessous sont ABSORBÉES par 3b/3d ; conservées
+> pour mémoire. Phases 6 (UI) et 7 (manifest/doc) inchangées, après 3d.
+
 - Introduire `_hoist_slack(cfg, creds)` sur le modèle des autres canaux.
 - Remplacer `self._socket_client` unique par `self._slack_sockets: dict[account_id, WSSocketModeClient]`.
 - Démarrer un socket par compte activé (app_token présent). Au boot, `auth.test` → mapper `team_id → account_id`.
