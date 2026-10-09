@@ -941,3 +941,52 @@ def test_slack_cancellation_after_successful_env_write_does_not_rollback_config(
     assert asyncio.run(_run()) is True
     assert "SLACK_BOT_TOKEN=xoxb-NEW" in env.read_text(encoding="utf-8")
     assert json.loads(cfg.read_text(encoding="utf-8"))["slack"]["command"] == "new"
+
+
+def _read_cfg(tmp_path):
+    import json
+    p = tmp_path / "config.json"
+    return json.loads(p.read_text()) if p.exists() else {}
+
+
+def test_save_accounts_roundtrip(tmp_path, monkeypatch) -> None:
+    """A named workspace persists under slack.accounts with owner + allow-list."""
+    import kiro_crew.dashboard.handlers.messaging as mod
+    body = {"accounts": [
+        {"account_id": "acme", "owner_id": "U0123ABC456", "allowed_users": ["U0999ZZZ999"]}
+    ]}
+    (status, resp), _env = _client_put(mod, monkeypatch, tmp_path, body)
+    assert status == 200, resp
+    acc = _read_cfg(tmp_path)["slack"]["accounts"]
+    assert acc["acme"]["owner_id"] == "U0123ABC456"
+    assert acc["acme"]["allowed_users"] == [{"slack_id": "U0999ZZZ999"}]
+
+
+def test_save_accounts_rejects_reserved_default(tmp_path, monkeypatch) -> None:
+    import kiro_crew.dashboard.handlers.messaging as mod
+    body = {"accounts": [{"account_id": "default", "owner_id": "U0123ABC456"}]}
+    (status, resp), _ = _client_put(mod, monkeypatch, tmp_path, body)
+    assert status == 400
+    assert "default" in resp["error"]
+
+
+def test_save_accounts_rejects_bad_owner(tmp_path, monkeypatch) -> None:
+    import kiro_crew.dashboard.handlers.messaging as mod
+    body = {"accounts": [{"account_id": "acme", "owner_id": "not-a-slack-id"}]}
+    (status, resp), _ = _client_put(mod, monkeypatch, tmp_path, body)
+    assert status == 400
+
+
+def test_save_accounts_preserves_existing_tokens(tmp_path, monkeypatch) -> None:
+    """An owner/allow-list edit must not wipe a config-stored per-account token."""
+    import json
+    import kiro_crew.dashboard.handlers.messaging as mod
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"slack": {"accounts": {"acme": {
+        "owner_id": "U0123ABC456", "allowed_users": [], "bot_token": "xoxb-keep"}}}}))
+    body = {"accounts": [{"account_id": "acme", "owner_id": "U0123ABC456", "allowed_users": ["U0999ZZZ999"]}]}
+    (status, resp), _ = _client_put(mod, monkeypatch, tmp_path, body)
+    assert status == 200, resp
+    acc = _read_cfg(tmp_path)["slack"]["accounts"]["acme"]
+    assert acc["bot_token"] == "xoxb-keep"
+    assert acc["allowed_users"] == [{"slack_id": "U0999ZZZ999"}]

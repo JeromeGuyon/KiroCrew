@@ -101,6 +101,24 @@ async def api_slack_config_get(request: web.Request) -> web.Response:
                 u["slack_id"] for u in slack.allowed_users if u.get("slack_id")
             ],
             "allowed_enterprise_ids": list(slack.allowed_enterprise_ids),
+            # Multi-workspace (phase 6): one read-only summary per additional
+            # workspace configured under slack.accounts. Secrets are NEVER
+            # included — only the owner, the allow-list member ids, and whether
+            # each per-account token is present (resolved from the per-account
+            # credential or the account config). The editor saves tokens through
+            # the dedicated per-account credential path, not through this blob.
+            "accounts": [
+                {
+                    "account_id": _aid,
+                    "owner_id": _acct.owner_id,
+                    "allowed_users": [
+                        u["slack_id"] for u in _acct.allowed_users if u.get("slack_id")
+                    ],
+                    "bot_token_set": bool(_acct.bot_token),
+                    "app_token_set": bool(_acct.app_token),
+                }
+                for _aid, _acct in sorted(slack.accounts.items())
+            ],
             "reactions_enabled": slack.reactions_enabled,
             "show_thinking": slack.show_thinking,
             "session_folder": slack.session_folder,
@@ -279,6 +297,70 @@ async def _slack_config_save_locked(request: web.Request) -> web.Response:
         if new_users != slack_cfg.get("allowed_users", []):
             staged["allowed_users"] = new_users
             applied.append("allowed_users")
+
+    if "accounts" in body:
+        # Multi-workspace (phase 6): a list of additional workspaces, each
+        # {account_id, owner_id?, allowed_users?[]}. Tokens are NOT accepted
+        # here — they go through the per-account credential path
+        # (SLACK_BOT_TOKEN__<hex>) so a secret never rides in this config blob.
+        # Existing per-account tokens stored in config.json and any preserved
+        # member display names are kept across an edit.
+        raw_accounts = body.get("accounts")
+        if not isinstance(raw_accounts, list):
+            return _deny("accounts must be a list")
+        existing_accounts = (
+            slack_cfg.get("accounts") if isinstance(slack_cfg.get("accounts"), dict) else {}
+        )
+        new_accounts: dict[str, dict] = {}
+        for entry in raw_accounts:
+            if not isinstance(entry, dict):
+                return _deny("each account must be an object")
+            aid = str(entry.get("account_id", "")).strip()
+            if not aid or not aid.replace("-", "").replace("_", "").isalnum():
+                return _deny("account_id must be alphanumeric/-/_ and non-empty")
+            if aid == "default":
+                return _deny("account_id 'default' is reserved for the top-level account")
+            if aid in new_accounts:
+                return _deny(f"duplicate account_id {aid!r}")
+            a_owner = str(entry.get("owner_id", "")).strip()
+            if a_owner and not USER_ID_RE.match(a_owner):
+                return _deny(f"account {aid}: owner_id must be a Slack member ID")
+            try:
+                a_ids = _clean_id_list(
+                    entry.get("allowed_users", []),
+                    lambda v: bool(USER_ID_RE.match(v)),
+                    f"account {aid} user ID",
+                )
+            except ValueError as exc:
+                return _deny(str(exc))
+            prior = existing_accounts.get(aid, {}) if isinstance(existing_accounts, dict) else {}
+            prior_names = {
+                u["slack_id"]: u.get("name", "")
+                for u in prior.get("allowed_users", [])
+                if isinstance(u, dict) and u.get("slack_id")
+            }
+            seen_a: set[str] = set()
+            a_users: list[dict[str, str]] = []
+            for uid in a_ids:
+                if uid in seen_a:
+                    continue
+                seen_a.add(uid)
+                e = {"slack_id": uid}
+                if prior_names.get(uid):
+                    e["name"] = prior_names[uid]
+                a_users.append(e)
+            acct: dict[str, object] = {"owner_id": a_owner, "allowed_users": a_users}
+            # Preserve any tokens already stored in config (the credential path
+            # is preferred, but a config-stored token must not be wiped by an
+            # owner/allow-list edit).
+            for tok_key in ("bot_token", "app_token"):
+                if prior.get(tok_key):
+                    acct[tok_key] = prior[tok_key]
+            new_accounts[aid] = acct
+        # Boot-read field (accounts carries restart=True): stage only on change.
+        if new_accounts != existing_accounts:
+            staged["accounts"] = new_accounts
+            applied.append("accounts")
 
     for key in ("reactions_enabled", "show_thinking", "auto_link_sessions"):
         if key in body:
