@@ -1106,6 +1106,10 @@ class GatewayOrchestrator:
         # inbound envelope. Empty for a single-workspace install.
         self._slack_account_sockets: dict[str, WSSocketModeClient] = {}
         self._slack_socket_account: dict[int, str] = {}
+        # Per-account outbound clients (named workspaces); 'default' uses
+        # self.slack. Selected by self.slack_for(account_id) so a reply posts
+        # with the workspace's own bot token (phase 3d outbound).
+        self._slack_account_clients: dict[str, "RealSlackClient"] = {}
         self._wecom_client: "WeComClient | None" = None  # set by maybe_start_wecom
         # Registry-owned live channel handles ({channel_type: client}). The
         # per-channel _<type>_client attributes are legacy mirrors kept in sync
@@ -14012,6 +14016,19 @@ class GatewayOrchestrator:
         self._wecom_bot_id = creds.get(CRED_WECOM_BOT_ID, "")
         self._wecom_secret = creds.get(CRED_WECOM_SECRET, "")
         self._wecom_enabled = bool(cfg.wecom.enabled and self._wecom_bot_id and self._wecom_secret)
+
+    def slack_for(self, account_id: str | None):
+        """The outbound Slack client for *account_id* (phase 3d).
+
+        ``None``/``"default"`` returns ``self.slack`` (the top-level client), so
+        every existing caller is unchanged. A named workspace returns its own
+        ``RealSlackClient`` (its own bot token), falling back to ``self.slack``
+        only if that account has no client — which cannot happen for an enabled
+        account but keeps a reply deliverable rather than crashing.
+        """
+        if account_id and account_id != "default":
+            return self._slack_account_clients.get(account_id) or self.slack
+        return self.slack
 
     def _build_slack_runtime(
         self, cfg: KiroCrewConfig, creds: Mapping[str, str]

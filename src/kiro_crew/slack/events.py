@@ -1261,6 +1261,13 @@ async def init_socket_mode(orch: GatewayOrchestrator, seen: SeenCache) -> None:
     # named account whose authz was not registered at boot is skipped (defense
     # in depth: no socket without an owner). Connect happens in _connect_slack.
     orch._slack_account_sockets = {}
+    # Phase 3d (outbound): a RealSlackClient per enabled named workspace, so a
+    # reply is posted with the SAME workspace's bot token the event arrived on
+    # — never the default bot answering another workspace's message. The default
+    # account keeps using orch.slack. Cheap to build (each just wraps an
+    # AsyncWebClient); keyed by account_id and selected by orch.slack_for().
+    orch._slack_account_clients = {}
+    from kiro_crew.slack.client import RealSlackClient  # local: avoid import cycle
     for _aid, _rt in orch._slack_runtime.items():
         if _aid == "default" or not _rt.enabled:
             continue
@@ -1268,6 +1275,7 @@ async def init_socket_mode(orch: GatewayOrchestrator, seen: SeenCache) -> None:
         _sock = WSSocketModeClient(app_token=_rt.app_token, web_client=_wc)
         _sock.socket_mode_request_listeners.append(_on_event)  # type: ignore[arg-type]
         orch._slack_account_sockets[_aid] = _sock
+        orch._slack_account_clients[_aid] = RealSlackClient(_rt.bot_token)
         orch._slack_socket_account[id(_sock)] = _aid
         logger.info("slack: mounted socket for workspace account %r", _aid)
 

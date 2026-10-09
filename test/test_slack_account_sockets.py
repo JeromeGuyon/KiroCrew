@@ -102,6 +102,9 @@ async def test_enabled_named_account_gets_its_own_socket(_patch_slack):
     # the acme socket carries the acme app token + bot web client
     assert acme_sock.app_token == "xapp-acme"
     assert acme_sock.web_client.token == "xoxb-acme"
+    # phase 3d outbound: a per-account RealSlackClient is built for acme
+    assert "acme" in orch._slack_account_clients
+    assert "default" not in orch._slack_account_clients  # default uses orch.slack
 
 
 @pytest.mark.asyncio
