@@ -110,6 +110,8 @@ from kiro_crew.slack.handler import (
     is_allowed_user,
     is_owner,
     is_yolo_mode,
+    set_account_authz,
+    clear_account_authz,
     set_allowed_users,
     set_dashboard_state,
     set_open_channels,
@@ -1050,6 +1052,21 @@ async def init_socket_mode(orch: GatewayOrchestrator, seen: SeenCache) -> None:
     set_tracking_channels(orch._tracking_channels)
     set_open_channels(orch._open_channels)
     set_owner_id(orch._owner_id)
+    # Phase 3b/3c-i: register each NAMED workspace's own owner + allow-list in
+    # the per-account authz registry, so an account-aware predicate call
+    # (is_owner/is_allowed_user with account_id) isolates it from 'default' and
+    # from every other workspace. 'default' is intentionally NOT registered — it
+    # stays on the globals set just above. This only populates authorization
+    # state; it starts no socket (that is 3c-ii), so it is safe and inert for a
+    # single-workspace install (no accounts -> empty loop).
+    clear_account_authz()
+    for _acct_id, _acct_cfg in orch._cfg.slack.accounts.items():
+        _rt = orch._slack_runtime.get(_acct_id)
+        _acct_owner = _rt.owner_id if _rt else ""
+        _acct_allowed = {
+            u["slack_id"] for u in _acct_cfg.allowed_users if u.get("slack_id")
+        }
+        set_account_authz(_acct_id, _acct_owner, _acct_allowed)
     if orch._cfg.agent.dangerously_skip_permissions:
         # grant_declared_yolo walks the profiles dir — blocking, so off-loop.
         await asyncio.to_thread(set_yolo_mode, True)
@@ -1071,9 +1088,17 @@ async def init_socket_mode(orch: GatewayOrchestrator, seen: SeenCache) -> None:
         orch.slack = None
         return
 
-    web_client = AsyncWebClient(token=orch._bot_token)
+    # Phase 3c-i (multi-workspace seam): the socket is built from the resolved
+    # per-account runtime entry rather than the raw orch._bot_token/_app_token.
+    # For the implicit 'default' account these hold exactly the top-level
+    # tokens, so this is behavior-identical today; it is the seam the N-socket
+    # loop (3c-ii) will iterate, one WSSocketModeClient per enabled account.
+    _account = orch._slack_runtime.get("default")
+    _bot_token = _account.bot_token if _account else orch._bot_token
+    _app_token = _account.app_token if _account else orch._app_token
+    web_client = AsyncWebClient(token=_bot_token)
     orch._socket_client = WSSocketModeClient(
-        app_token=orch._app_token,
+        app_token=_app_token,
         web_client=web_client,
     )
 
