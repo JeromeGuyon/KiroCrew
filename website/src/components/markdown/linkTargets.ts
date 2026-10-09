@@ -173,7 +173,17 @@ export function useSessionChip(raw: string | null, actions: SessionActions): { k
   const row = closedAnswers.has(candidate) ? closedAnswers.get(candidate) : answer?.for === candidate ? answer.row : null
   if (!row) return null
   const openClosed = closed.open
-  return { key: candidate, title: row.title, open: () => openClosed(row) }
+  // `open` checks again that the session still exists: the cached answer can
+  // be older than a delete. A session gone since drops its chip.
+  const openFresh = () => {
+    void openClosed(row).then((outcome) => {
+      if (outcome !== 'gone') return
+      closedProbes.delete(candidate)
+      closedAnswers.set(candidate, null)
+      setAnswer({ for: candidate, row: null })
+    })
+  }
+  return { key: candidate, title: row.title, open: openFresh }
 }
 
 /**

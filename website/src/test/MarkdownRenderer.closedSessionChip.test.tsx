@@ -19,7 +19,7 @@ let onSessionOpen: ReturnType<typeof vi.fn>
 beforeEach(() => {
   resetClosedSessionProbes()
   lookup = vi.fn(async (key: string) => (key === CLOSED ? { key: STEM, title: 'Earlier work' } : null))
-  open = vi.fn()
+  open = vi.fn(async () => 'opened' as const)
   onSessionOpen = vi.fn()
 })
 
@@ -38,7 +38,7 @@ describe('closed-session chip', () => {
     await vi.waitFor(() => expect(screen.getByText(CLOSED)).toHaveAttribute('data-session-key', CLOSED))
     const chip = screen.getByText(CLOSED)
     fireEvent.click(chip)
-    expect(open).toHaveBeenCalledWith({ key: STEM, title: 'Earlier work' })
+    await vi.waitFor(() => expect(open).toHaveBeenCalledWith({ key: STEM, title: 'Earlier work' }))
     expect(onSessionOpen).not.toHaveBeenCalled()
     expect(lookup).toHaveBeenCalledWith(CLOSED)
   })
@@ -48,7 +48,7 @@ describe('closed-session chip', () => {
     const link = screen.getByText('the old run').closest('a')!
     await vi.waitFor(() => expect(link.getAttribute('title')).toContain('Earlier work'))
     fireEvent.click(link)
-    expect(open).toHaveBeenCalledWith({ key: STEM, title: 'Earlier work' })
+    await vi.waitFor(() => expect(open).toHaveBeenCalledWith({ key: STEM, title: 'Earlier work' }))
   })
 
   it('an open session still switches through the roster, with no probe', () => {
@@ -87,5 +87,25 @@ describe('closed-session chip', () => {
     renderWith(`\`${CLOSED}\``)
     expect(screen.getByText(CLOSED)).toHaveAttribute('data-session-key', CLOSED)
     expect(lookup).toHaveBeenCalledTimes(1)
+  })
+
+  it('a session the click finds deleted drops its chip', async () => {
+    renderWith(`Earlier: \`${CLOSED}\`.`)
+    await vi.waitFor(() => expect(screen.getByText(CLOSED)).toHaveAttribute('data-session-key', CLOSED))
+    open.mockResolvedValue('gone')
+    fireEvent.click(screen.getByText(CLOSED))
+    await vi.waitFor(() => expect(screen.getByText(CLOSED)).not.toHaveAttribute('data-session-key'))
+    expect(open).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed probe offers no chip and is retried on a later render', async () => {
+    lookup.mockRejectedValueOnce(new Error('offline'))
+    const first = renderWith(`\`${CLOSED}\``)
+    await vi.waitFor(() => expect(lookup).toHaveBeenCalledTimes(1))
+    expect(screen.getByText(CLOSED)).not.toHaveAttribute('data-session-key')
+    first.unmount()
+    renderWith(`\`${CLOSED}\``)
+    await vi.waitFor(() => expect(screen.getByText(CLOSED)).toHaveAttribute('data-session-key', CLOSED))
+    expect(lookup).toHaveBeenCalledTimes(2)
   })
 })
