@@ -159,6 +159,7 @@ import { cn } from '../../lib/utils'
 import { LIST_SHELL_CLS, LIST_HEADER_CLS, LIST_TITLE_CLS, LIST_BODY_CLS, ROW_BOX_CLS, ROW_IDLE_CLS, ROW_ACTIVE_CLS, ROW_TITLE_CLS, ROW_STATUS_CLS } from '../../components/listShell'
 import { ListDock } from '../../components/ListDock'
 import { useColumnResize } from '../../hooks/useColumnResize'
+import { useMeasuredHeight } from '../../hooks/useMeasuredHeight'
 import { loadColumnWidth } from '../../lib/columnWidth'
 import { tabStatus, type TabStatus } from '../../lib/sessionTabs'
 import { lastActivityEpoch } from '../chat/sessionOrder'
@@ -2485,6 +2486,16 @@ export default function MembersPage() {
   // slot_key the same way the avatar does, so a thread whose confirmed slot
   // has not resolved yet still reads live.
   const pillSlotKey = activeSlot || active?.slot_key || ''
+  // The DM header floats over the top of the thread (#18325): the identity
+  // pill is a Glass chip, so the conversation scrolls under it the way it
+  // scrolls under the composer dock. Two measurements, never constants: the
+  // header's own height is what the content under it pays, and the block of
+  // notices / greeting cards that can sit between header and pane reports
+  // its height so the pane knows whether IT is the thing under the header
+  // (nothing between: the pane's rows pad below the header) or something else
+  // is (a card between: the card pads, the pane starts below the card).
+  const [threadHeaderRef, threadHeaderH] = useMeasuredHeight<HTMLElement>()
+  const [betweenHeaderRef, betweenHeaderH] = useMeasuredHeight<HTMLDivElement>()
   const pillStreamState = useAppSelector((s) => (pillSlotKey ? selectSlotStreamState(s, pillSlotKey) : 'idle'))
   const pillLiveSlot = useAppSelector((s) => (pillSlotKey ? s.dashboard.slots.find((sl) => sl.key === pillSlotKey) : undefined))
   const uiLang = useLanguage().resolved
@@ -3827,17 +3838,28 @@ export default function MembersPage() {
         )}
         {active && (
           <>
-            {/* No rule under the header: it shares the transcript's background
-                and is set off by spacing alone, the way ChatPage's session
-                header sits over its transcript (bg-bg, no border-b). A hairline
-                here read as a second frame inside the pane (issue #9425).
+            {/* The header floats over the thread's top edge (#18325), the way
+                ChatPage's title row overlays its transcript: absolute, no
+                background of its own, so the conversation scrolls under the
+                Glass identity pill and the pill reads as a chip on the
+                conversation rather than a bar above it. The pane under it pays
+                for the band with its scroller's top padding (`topInset`,
+                measured from this box by `threadHeaderRef`), so at scroll top
+                nothing hides under the pill. `pointer-events-none` on the row
+                and on its three cells, restored on the controls only, so a
+                wheel or touch beside the pill reaches the transcript (the
+                strip beside an iOS toolbar does the same). z-20: above the
+                pane's own chrome (its dock and pinned prompt, z-10 at most),
+                below the floating Profile card (z-30), whose scrim covers the
+                header. No rule under it: a hairline here read as a second
+                frame inside the pane (issue #9425).
                 Three columns, the outer two equal, so the identity pill in the
                 middle is centred on the pane whether or not the back button
                 (narrow) or the panel opener (docked, panel hidden) is present:
                 a flex row with `flex-1` around the pill would shift it by the
                 width of whichever side control is missing. */}
-            <header className="grid grid-cols-[1fr_minmax(0,auto)_1fr] items-center gap-2 px-3 py-2" data-testid="member-thread-header">
-              <div className="flex items-center justify-start min-w-0 gap-1">
+            <header ref={threadHeaderRef} className="absolute top-0 inset-x-0 z-20 grid grid-cols-[1fr_minmax(0,auto)_1fr] items-center gap-2 px-3 py-2 pointer-events-none" data-testid="member-thread-header">
+              <div className="flex items-center justify-start min-w-0 gap-1 [&>*]:pointer-events-auto">
                 {/* The roster, folded into one chip (crewmate-panel IA): stacked
                     faces and the count; open, a searchable list that switches
                     the thread. Hidden below md, where the phone's back button
@@ -3908,7 +3930,7 @@ export default function MembersPage() {
                 // press closes it (through the draft guard — see requestCloseProfile)
                 // instead of re-opening on the default tab, which remounted the card.
                 onClick={() => { if (profile) requestCloseProfile(); else openProfile() }}
-                className="glass-shadow flex items-center gap-2.5 pl-2.5 pr-3 py-1.5 min-w-0 max-w-full justify-self-center cursor-pointer text-left focus-ring"
+                className="glass-shadow flex items-center gap-2.5 pl-2.5 pr-3 py-1.5 min-w-0 max-w-full justify-self-center cursor-pointer text-left focus-ring pointer-events-auto"
                 title={t('pages.membersPage.profile_card')}
                 aria-expanded={!!profile}
                 data-testid="member-identity-pill"
@@ -3997,7 +4019,7 @@ export default function MembersPage() {
                   announcing it taught the user a term for a thing that can
                   never be otherwise. The member's edit entry is not a peer of
                   this toggle: it is the identity pill in the middle. */}
-              <div className="flex items-center justify-end min-w-0">
+              <div className="flex items-center justify-end min-w-0 [&>*]:pointer-events-auto">
                 {/* The activity line for assistive tech: the same text, outside
                     the button so it never joins the crewmate's name, and NOT a
                     live region — a line that changes several times a turn
@@ -4019,6 +4041,14 @@ export default function MembersPage() {
                 )}
               </div>
             </header>
+            {/* Everything that can sit between the header and the pane —
+                notices, the greeting cards — stays in flow and is padded
+                below the floating header by the header's measured height;
+                these carry controls, and a control under the glass is an
+                ambiguous tap. `empty:hidden`: with nothing to show the box
+                has no children and no height, so it neither reserves the
+                band nor reports a height, and the pane takes the inset. */}
+            <div ref={betweenHeaderRef} className="empty:hidden flex flex-col" style={{ paddingTop: threadHeaderH }}>
             {/* The roster is folded into the switcher while a DM is open, so
                 every roster-only failure also needs a visible copy above the
                 thread. When the roster is pinned back on desktop its own copy
@@ -4231,6 +4261,7 @@ export default function MembersPage() {
                 />
               </div>
             )}
+            </div>
             {activeSlot ? (
               <div className="flex-1 min-h-0">
                 <ErrorBoundary>
@@ -4255,6 +4286,9 @@ export default function MembersPage() {
                     // ready" would contradict it one line down.
                     // A greeting card above already speaks for the empty chat.
                     hideEmptyHint={activeThreadFailed || mateGreeting?.kind === 'cold'}
+                    // Under the floating header only when nothing sits between
+                    // them (see the block above); a card between already paid.
+                    topInset={betweenHeaderH > 0 ? 0 : threadHeaderH}
                     crewmate={crewmateIdentity}
                     onOpenCrewWorkLog={openCrewWorkLog}
                     openSideChat={openMemberSideChat}
