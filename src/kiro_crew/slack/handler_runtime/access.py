@@ -243,14 +243,22 @@ def add_trusted_session(
 
 
 def is_allowed_user(user_id: str) -> bool:
-    """Check if user_id is the owner.
+    """Check if *user_id* may drive the native Slack path.
 
-    Multi-user access is disabled for security — only the owner
-    (KIROCREW_OWNER_ID) is authorized to interact via Slack.
+    Authorized when the user is the owner OR an explicitly approved member of the
+    allowlist (``_allowed_users``, populated at boot from
+    ``config.json → slack.allowed_users`` and maintained via the owner's
+    Allow/Deny prompts). The owner is always authorized even when absent from the
+    set.
+
+    This is the general invocation gate. Owner-only privileges (global YOLO,
+    per-session Trust grants, dashboard-link minting, tracking-channel changes)
+    remain gated on :func:`is_owner` at their own call sites and are NOT widened
+    by allowlist membership.
     """
     if not user_id:
         return False
-    return is_owner(user_id)
+    return is_owner(user_id) or user_id in _allowed_users
 
 
 def set_tracking_channels(channel_ids: set[str]) -> None:

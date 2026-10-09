@@ -956,18 +956,14 @@ class GatewayOrchestrator:
         self._app_token = creds.get(CRED_SLACK_APP_TOKEN, "")
         self._bot_token = creds.get(CRED_SLACK_BOT_TOKEN, "")
         self._owner_id = creds.get(CRED_OWNER_ID, "")
-        # Multi-user access is disabled — only owner is authorized.
-        # Prune stale allowed_users entries from config and warn.
-        stale = {u["slack_id"] for u in cfg.slack.allowed_users} - (
-            {self._owner_id} if self._owner_id else set()
-        )
-        if stale:
-            logger.warning(
-                "Pruning %d stale allowlist entries (multi-user disabled): %s",
-                len(stale),
-                stale,
-            )
+        # Multi-user access: the owner plus every explicitly approved member of
+        # config.json → slack.allowed_users. Owner is always included even when
+        # absent from the config list. Members are added by the owner via the
+        # Allow/Deny prompts (see slack/allowlist.py), which persist here.
         self._allowed_users: set[str] = {self._owner_id} if self._owner_id else set()
+        self._allowed_users |= {
+            u["slack_id"] for u in cfg.slack.allowed_users if u.get("slack_id")
+        }
         self._tracking_channels: set[str] = {
             c["channel_id"] for c in cfg.slack.tracking_channels if c.get("channel_id")
         }

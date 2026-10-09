@@ -2420,6 +2420,35 @@ class TestPureHelpers:
         finally:
             h.set_owner_id("")
 
+    def test_allowlist_member_is_allowed_without_being_owner(self):
+        """A non-owner on the allowlist may invoke; a non-member is rejected."""
+        h.set_owner_id("UOWNER")
+        h.set_allowed_users({"UOWNER", "UMEMBER"})
+        try:
+            # Owner: always allowed.
+            assert h.is_allowed_user("UOWNER") is True
+            # Allowlist member (not the owner): allowed.
+            assert h.is_allowed_user("UMEMBER") is True
+            # Unknown user: rejected.
+            assert h.is_allowed_user("USTRANGER") is False
+            # Empty id: rejected.
+            assert h.is_allowed_user("") is False
+        finally:
+            h.set_owner_id("")
+            h.set_allowed_users(set())
+
+    def test_owner_allowed_even_when_absent_from_allowlist(self):
+        """The owner is authorized regardless of the allowlist contents."""
+        h.set_owner_id("UOWNER")
+        h.set_allowed_users({"UMEMBER"})  # owner deliberately not in the set
+        try:
+            assert h.is_allowed_user("UOWNER") is True
+            assert h.is_allowed_user("UMEMBER") is True
+            assert h.is_allowed_user("UOTHER") is False
+        finally:
+            h.set_owner_id("")
+            h.set_allowed_users(set())
+
     def test_trusted_session_requires_non_empty_key(self):
         assert h.is_slack_session_trusted("") is False
         h.add_trusted_session("")

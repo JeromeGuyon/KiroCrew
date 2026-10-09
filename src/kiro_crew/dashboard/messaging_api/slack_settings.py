@@ -94,10 +94,12 @@ async def api_slack_config_get(request: web.Request) -> web.Response:
             "app_token_preview": _mask_secret(app),
             "owner_id": owner,
             "command": slack.command,
-            # allowed_users / open_channels are deliberately NOT exposed: the
-            # runtime enforces owner-only access in this build (is_allowed_user
-            # ignores both), so surfacing editors would create access rules
-            # that are never honored. Re-add when multi-user Slack lands.
+            # allowed_users: explicitly approved members (besides the owner) who
+            # may invoke the agent on Slack. Exposed as the list of Slack member
+            # IDs; the per-entry display name is preserved server-side on save.
+            "allowed_users": [
+                u["slack_id"] for u in slack.allowed_users if u.get("slack_id")
+            ],
             "allowed_enterprise_ids": list(slack.allowed_enterprise_ids),
             "reactions_enabled": slack.reactions_enabled,
             "show_thinking": slack.show_thinking,
@@ -242,6 +244,41 @@ async def _slack_config_save_locked(request: web.Request) -> web.Response:
         if new_ents != slack_cfg.get("allowed_enterprise_ids", []):
             staged["allowed_enterprise_ids"] = new_ents
             applied.append("allowed_enterprise_ids")
+
+    if "allowed_users" in body:
+        try:
+            new_ids = _clean_id_list(
+                body.get("allowed_users"),
+                lambda v: bool(USER_ID_RE.match(v)),
+                "user ID",
+            )
+        except ValueError as exc:
+            return _deny(str(exc))
+        # Entries are {slack_id, name}; the UI edits only the id list. Preserve
+        # the display name of any id that is already stored (added via the
+        # owner's Allow/Deny prompts) so an edit here does not wipe it, and
+        # de-duplicate while keeping input order. The owner is always
+        # authorized at runtime and need not appear here.
+        existing_names = {
+            u["slack_id"]: u.get("name", "")
+            for u in slack_cfg.get("allowed_users", [])
+            if u.get("slack_id")
+        }
+        seen: set[str] = set()
+        new_users: list[dict[str, str]] = []
+        for uid in new_ids:
+            if uid in seen:
+                continue
+            seen.add(uid)
+            entry = {"slack_id": uid}
+            name = existing_names.get(uid, "")
+            if name:
+                entry["name"] = name
+            new_users.append(entry)
+        # Boot-read field: stage only on actual change (see command above).
+        if new_users != slack_cfg.get("allowed_users", []):
+            staged["allowed_users"] = new_users
+            applied.append("allowed_users")
 
     for key in ("reactions_enabled", "show_thinking", "auto_link_sessions"):
         if key in body:

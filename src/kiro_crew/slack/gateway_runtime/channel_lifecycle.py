@@ -542,6 +542,9 @@ async def _on_slack_config_change(self: GatewayOrchestrator, change: ConfigChang
       orchestrator sets AND the ``handler`` module globals, mutated in place
       so the Slack-native modal (which edits the same set objects) and a CLI
       write converge on one set.
+    * ``slack.allowed_users`` -> the invocation allowlist (owner + approved
+      members), rebuilt and pushed to the ``handler`` globals in place, same
+      convergence as the Allow/Deny path.
     * ``slack.channels`` / ``slack.dm_activation`` / ``messaging.*`` /
       ``trusted_bot_*`` / ``home_tab_sessions_per_kind`` /
       ``forward_to_agent_callback`` -> the shared config object every Slack
@@ -581,10 +584,31 @@ async def _on_slack_config_change(self: GatewayOrchestrator, change: ConfigChang
         self._open_channels.clear()
         self._open_channels.update(new.slack.open_channels)
         slack_handler.set_open_channels(self._open_channels)
+    if "slack.allowed_users" in slack_paths:
+        # Rebuild the invocation allowlist live: owner (always) plus every
+        # config-approved member. Mutate the orchestrator's own set and push it
+        # to the handler module globals, the same convergence the Slack-native
+        # Allow/Deny path uses, so a dashboard save takes effect on the next
+        # message instead of waiting for a restart.
+        allowed = {self._owner_id} if self._owner_id else set()
+        allowed |= {
+            u["slack_id"]
+            for u in new.slack.allowed_users
+            if isinstance(u, dict) and u.get("slack_id")
+        }
+        self._allowed_users.clear()
+        self._allowed_users.update(allowed)
+        slack_handler.set_allowed_users(self._allowed_users)
     authz_paths = sorted(
         p
         for p in slack_paths
-        if p in ("slack.trusted_bot_ids", "slack.open_channels", "slack.tracking_channels")
+        if p
+        in (
+            "slack.trusted_bot_ids",
+            "slack.open_channels",
+            "slack.tracking_channels",
+            "slack.allowed_users",
+        )
     )
     if authz_paths:
         # Widening sets: the change itself is the auditable event, and the

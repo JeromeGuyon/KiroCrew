@@ -20,6 +20,7 @@ const SETUP_GUIDE = 'https://github.com/kirodotdev/KiroCrew/blob/main/src/kiro_c
 type Draft = {
   owner_id: string
   command: string
+  allowed_users: string[]
   allowed_enterprise_ids: string[]
   reactions_enabled: boolean
   show_thinking: boolean
@@ -35,6 +36,7 @@ function draftFrom(c: SlackConfigData): Draft {
   return {
     owner_id: c.owner_id,
     command: c.command,
+    allowed_users: [...(c.allowed_users ?? [])],
     allowed_enterprise_ids: [...c.allowed_enterprise_ids],
     reactions_enabled: c.reactions_enabled,
     show_thinking: c.show_thinking,
@@ -254,6 +256,7 @@ export function SlackPanel() {
     const payload: Partial<SlackConfigSave> = {
       owner_id: draft.owner_id.trim(),
       command: draft.command.trim(),
+      allowed_users: draft.allowed_users,
       allowed_enterprise_ids: draft.allowed_enterprise_ids,
       reactions_enabled: draft.reactions_enabled,
       show_thinking: draft.show_thinking,
@@ -396,6 +399,15 @@ export function SlackPanel() {
             onChange={v => upd({ owner_id: v })}
             placeholder={i18nT('pages.settings.slackPanel.u0123abc456')}
             disabled={ro}
+          />
+          <TagListEditor
+            label="Allowed users"
+            description="Slack member IDs allowed to invoke the agent, in addition to the owner. Starts with U or W."
+            values={draft.allowed_users}
+            placeholder="U0456DEF789"
+            onChange={v => upd({ allowed_users: v })}
+            validate={v => /^[UW][A-Z0-9]{1,19}$/.test(v)}
+            readOnly={ro}
           />
           <TagListEditor
             label={i18nT('pages.settings.slackPanel.allowed_enterprise_orgs')}

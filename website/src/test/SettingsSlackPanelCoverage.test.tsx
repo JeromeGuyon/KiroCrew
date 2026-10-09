@@ -79,6 +79,7 @@ function config(over: Partial<SlackConfigData> = {}): SlackConfigData {
     app_token_preview: '',
     owner_id: 'U000OWNER',
     command: 'kirocrew',
+    allowed_users: [],
     allowed_enterprise_ids: ['E000ONE'],
     reactions_enabled: false,
     show_thinking: false,
@@ -264,7 +265,9 @@ describe('SlackPanel read-only session', () => {
     // The app-level credential is unset, so its read-only row says so.
     expect(screen.getByText('(not set)')).toBeInTheDocument()
     // An empty allowlist under read-only renders the placeholder, not an editor.
-    expect(screen.getByText('(none)')).toBeInTheDocument()
+    // Two list editors (allowed users + enterprise orgs) each render it, so
+    // assert at least one rather than a single match.
+    expect(screen.getAllByText('(none)').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByRole('button', { name: 'Add' })).not.toBeInTheDocument()
   })
 
@@ -283,14 +286,21 @@ describe('SlackPanel enterprise allowlist editor', () => {
   function tagInput() {
     return screen.getByPlaceholderText('E0123ABC456')
   }
+  /** The enterprise editor container, scoped so the sibling "Allowed users"
+   *  editor's identically-labelled controls (Add button, (none) placeholder)
+   *  never match. */
+  function tagScope() {
+    const el = tagInput().closest('[data-setting-label]') as HTMLElement
+    return within(el)
+  }
 
   it('adds an org on click and keeps Add disabled while the draft is blank', async () => {
     seed()
     await hydrated()
 
-    expect(screen.getByRole('button', { name: 'Add' })).toBeDisabled()
+    expect(tagScope().getByRole('button', { name: 'Add' })).toBeDisabled()
     fireEvent.change(tagInput(), { target: { value: ' T000TWO ' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(tagScope().getByRole('button', { name: 'Add' }))
 
     expect(screen.getByText('T000TWO')).toBeInTheDocument()
     expect(tagInput()).toHaveValue('')
@@ -323,7 +333,7 @@ describe('SlackPanel enterprise allowlist editor', () => {
     expect(screen.getAllByText(/^E000ONE$/)).toHaveLength(1)
 
     fireEvent.change(tagInput(), { target: { value: 'E000ONE' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    fireEvent.click(tagScope().getByRole('button', { name: 'Add' }))
     expect(screen.getAllByText(/^E000ONE$/)).toHaveLength(1)
     expect(tagInput()).toHaveValue('')
   })
@@ -358,6 +368,7 @@ describe('SlackPanel save payload', () => {
     expect(save.mock.calls[0][0]).toEqual({
       owner_id: 'U000NEW',
       command: 'crew',
+      allowed_users: [],
       allowed_enterprise_ids: ['E000ONE'],
       reactions_enabled: true,
       show_thinking: true,

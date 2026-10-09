@@ -19,6 +19,8 @@ export interface SlackConfigData {
   app_token_preview: string
   owner_id: string
   command: string
+  /** Slack member IDs (besides the owner) allowed to invoke the agent. */
+  allowed_users: string[]
   allowed_enterprise_ids: string[]
   reactions_enabled: boolean
   show_thinking: boolean
@@ -27,8 +29,6 @@ export interface SlackConfigData {
   /** Open a Slack thread in the owner's bot DM for every new dashboard session on its first message. */
   auto_link_sessions?: boolean
 }
-
-/** Writable Slack config fields sent to PUT /api/slack/config. */
 export interface SlackConfigSave {
   bot_token: string
   bot_token_clear: boolean
@@ -36,6 +36,8 @@ export interface SlackConfigSave {
   app_token_clear: boolean
   owner_id: string
   command: string
+  /** Slack member IDs (besides the owner) allowed to invoke the agent. */
+  allowed_users: string[]
   allowed_enterprise_ids: string[]
   reactions_enabled: boolean
   show_thinking: boolean

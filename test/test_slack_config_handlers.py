@@ -325,6 +325,68 @@ def test_restart_required_only_on_actual_change(tmp_path, monkeypatch) -> None:
     assert body["restart_required"] is True
 
 
+def test_save_allowed_users_roundtrip_and_live_apply(tmp_path, monkeypatch) -> None:
+    """allowed_users is validated, persisted to config.json as {slack_id},
+    and does NOT require a restart (it is hot-applied)."""
+    import json
+
+    import kiro_crew.dashboard.handlers.messaging as mod
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"slack": {"command": "kirocrew"}}', encoding="utf-8")
+    monkeypatch.delenv("KIROCREW_OWNER_ID", raising=False)
+
+    (status, body), _env = _client_put(
+        mod, monkeypatch, tmp_path, {"allowed_users": ["U0123ABC456", "W0456DEF789"]}
+    )
+    assert status == 200
+    assert body["restart_required"] is False  # live-applied
+    stored = json.loads(cfg.read_text(encoding="utf-8"))["slack"]["allowed_users"]
+    assert stored == [{"slack_id": "U0123ABC456"}, {"slack_id": "W0456DEF789"}]
+
+
+def test_save_allowed_users_rejects_bad_id(tmp_path, monkeypatch) -> None:
+    """A member ID that is not U.../W... fails the save with a 400."""
+    import kiro_crew.dashboard.handlers.messaging as mod
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text('{"slack": {}}', encoding="utf-8")
+    monkeypatch.delenv("KIROCREW_OWNER_ID", raising=False)
+
+    (status, body), _env = _client_put(
+        mod, monkeypatch, tmp_path, {"allowed_users": ["not-an-id"]}
+    )
+    assert status == 400
+    assert "user ID" in body["error"]
+
+
+def test_save_allowed_users_preserves_existing_name(tmp_path, monkeypatch) -> None:
+    """The display name of an id already stored (added via Allow/Deny) is kept
+    when the UI re-sends only the id list; a new id has no name."""
+    import json
+
+    import kiro_crew.dashboard.handlers.messaging as mod
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {"slack": {"allowed_users": [{"slack_id": "U0123ABC456", "name": "Alice"}]}}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("KIROCREW_OWNER_ID", raising=False)
+
+    (status, _body), _env = _client_put(
+        mod, monkeypatch, tmp_path, {"allowed_users": ["U0123ABC456", "W0456DEF789"]}
+    )
+    assert status == 200
+    stored = json.loads(cfg.read_text(encoding="utf-8"))["slack"]["allowed_users"]
+    assert stored == [
+        {"slack_id": "U0123ABC456", "name": "Alice"},  # name preserved
+        {"slack_id": "W0456DEF789"},  # new id, no name
+    ]
+
+
 def test_webex_held_env_lock_leaves_legacy_credential_intact(tmp_path, monkeypatch) -> None:
     """When the .env lock is held (concurrent import), _write_env_updates raises
     OSError.  The Webex save handler must NOT purge the legacy config.json
