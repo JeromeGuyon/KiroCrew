@@ -7085,25 +7085,54 @@ def resolve_crew_identity(
     return ""
 
 
+#: The template kiro-cli runs when ``agent.default_agent`` names none.
+DEFAULT_KIRO_TEMPLATE = "kirocrew"
+
+
+def default_template(config) -> str:
+    """The template a session with no crewmate runs.
+
+    ``agent.default_agent``, else :data:`DEFAULT_KIRO_TEMPLATE`. Deliberately NOT
+    the ``default`` crewmate's ``kiro_agent``: a plain session is a template on
+    the default folder and memory store, never a crewmate. The
+    ``default`` crewmate is one row of ``config.agents`` like any other, talked
+    to in its DM thread, and may bind a different template.
+    """
+    name = getattr(getattr(config, "agent", None), "default_agent", "")
+    return name if isinstance(name, str) and name else DEFAULT_KIRO_TEMPLATE
+
+
 def _resolve_agent_selection(config, agent_name=None, project_dir=None, *, selection_kind=""):
-    """Select a config record/template without accessing any memory files."""
+    """Select a crewmate record or a template without accessing any memory files.
+
+    Returns ``(record, alias, template, requested_resolved)``. A crewmate pick
+    (``agent_name`` is a ``config.agents`` key and the stated namespace is not
+    ``template``) returns its record and alias, with ``template`` empty. Every
+    other selection is a TEMPLATE session: the materialized template the name
+    declares (an app's, a project's, one in ``~/.kiro/agents``), else
+    :func:`default_template`, with ``record`` None and ``alias`` empty. A plain
+    session -- no name at all -- is therefore the default template, never the
+    ``default`` crewmate. ``requested_resolved`` is False when a
+    non-empty name matched neither, so callers never advertise a name that
+    is not running.
+    """
     alias_hit = selection_kind != "template" and bool(agent_name) and agent_name in config.agents
-    passthrough = (
-        ""
-        if alias_hit or selection_kind == "member"
-        else _materialized_kiro_agent(agent_name, project_dir)
-    )
-    requested_resolved = (not agent_name) or alias_hit or bool(passthrough)
     if alias_hit:
-        alias = agent_name
-    elif config.default_agent in config.agents:
-        alias = config.default_agent
-    elif config.agents:
-        alias = next(iter(config.agents))
-        logger.warning("default_agent %r not found; using %r", config.default_agent, alias)
-    else:
-        alias = ""
-    return config.agents.get(alias), alias, passthrough, requested_resolved
+        return config.agents[agent_name], agent_name, "", True
+    fallback = default_template(config)
+    passthrough = (
+        "" if selection_kind == "member" else _materialized_kiro_agent(agent_name, project_dir)
+    )
+    # The default template is the floor every session can stand on, so naming
+    # it resolves whether or not the materialized snapshot lists it (a cold
+    # snapshot, a bare data home): an agent-less session resolved to it before
+    # the name was ever stamped, and stamping must not make it refusable.
+    requested_resolved = (
+        (not agent_name)
+        or bool(passthrough)
+        or (selection_kind != "member" and agent_name == fallback)
+    )
+    return None, "", passthrough or fallback, requested_resolved
 
 
 def resolve_agent_identity(config, agent_name=None, *, selection_kind="") -> tuple[str, str, str]:
@@ -7112,13 +7141,12 @@ def resolve_agent_identity(config, agent_name=None, *, selection_kind="") -> tup
     This does not authorize memory access. Runtime callers must resolve the full
     bindings; a model chip remains inspectable while learned memory is unavailable.
     """
-    record, alias, passthrough, _ = _resolve_agent_selection(
+    record, alias, template, _ = _resolve_agent_selection(
         config, agent_name, selection_kind=selection_kind
     )
     return (
         alias,
-        passthrough
-        or (dispatch_kiro_agent(record.kiro_agent) if record else config.agent.default_agent),
+        template or dispatch_kiro_agent(record.kiro_agent),
         normalize_agent_model(record.model) if record else "",
     )
 
@@ -7134,14 +7162,17 @@ def resolve_agent_bindings(
 ) -> ResolvedBindings:
     """Resolve workspace, memory store, and kiro agent for a session.
 
-    Resolution:
-    1. If agent_name is given and exists in config.agents → use its bindings
-    2. Otherwise use config.default_agent (guaranteed to exist by load()), but
-       keep dispatching *agent_name* itself when a materialized kiro agent
-       declares it (see :func:`_materialized_kiro_agent`) — an app's agents are
-       registered in ``~/.kiro/agents/`` and never added to ``config.agents``, so
-       this is the only thing that stops an app-bound session from silently
-       running the default agent.
+    Resolution (see :func:`_resolve_agent_selection`):
+    1. If agent_name is given and exists in config.agents → that crewmate's
+       bindings: its template, workspace, memory store and model pin.
+    2. Otherwise a TEMPLATE session on the default workspace and the default
+       memory store, with no crewmate model pin: the template *agent_name*
+       itself when a materialized kiro agent declares it (see
+       :func:`_materialized_kiro_agent` — an app's agents are registered in
+       ``~/.kiro/agents/`` and never added to ``config.agents``, so this is
+       what stops an app-bound session from silently running something else),
+       else :func:`default_template`. A plain session with no name is this
+       case: it is never the ``default`` crewmate.
 
     *project_dir* is the session's active project directory, which widens step 2 to
     that project's own ``.kiro`` scope. It must be the same directory Kiro Crew
@@ -7151,18 +7182,37 @@ def resolve_agent_bindings(
     """
     import dataclasses as _dc
 
-    agent_cfg, resolved_alias, passthrough, requested_resolved = _resolve_agent_selection(
+    agent_cfg, resolved_alias, template, requested_resolved = _resolve_agent_selection(
         config, agent_name, project_dir, selection_kind=selection_kind
     )
+
+    def _effective_memory(store_name: str) -> dict:
+        store_cfg = config.memory_stores.get(store_name)
+        store_dict = _dc.asdict(store_cfg) if store_cfg else {}
+        return resolve_memory_store_config(_dc.asdict(config.memory), store_dict)
+
     if agent_cfg is None:
-        logger.warning("No agents configured, using bare defaults")
+        # A template session: the template on the default folder and the
+        # default memory store. Nothing of any crewmate -- not the ``default``
+        # row's workspace, store or model pin -- reaches it.
+        default_ws = config.workspaces.get(config.default_workspace)
+        ws_dir = Path(default_ws.dir) if default_ws else Path("workspace")
+        if execution_context is not None:
+            store_name = execution_context.store.store_id
+            kiro_agent = execution_context.template_id
+            if execution_context.selection_kind == "member":
+                kiro_agent = dispatch_kiro_agent(kiro_agent)
+        else:
+            store_name = DEFAULT_MEMORY_STORE
+            kiro_agent = template
         return ResolvedBindings(
-            workspace_dir=Path("workspace"),
-            memory_store_name=DEFAULT_MEMORY_STORE,
-            effective_memory_config=_dc.asdict(config.memory),
-            kiro_agent=passthrough or config.agent.default_agent,
+            execution_context=execution_context,
+            workspace_dir=ws_dir,
+            memory_store_name=store_name,
+            effective_memory_config=_effective_memory(store_name),
+            kiro_agent=kiro_agent,
             requested_resolved=requested_resolved,
-            selection_kind="template" if passthrough else "",
+            selection_kind="template",
         )
 
     # Resolve workspace
@@ -7187,36 +7237,25 @@ def resolve_agent_bindings(
     # Canonical member/store mismatches are rejected before legacy use.
     if execution_context is not None:
         store_name = execution_context.store.store_id
-    elif passthrough:
-        store_name = DEFAULT_MEMORY_STORE
-    else:
-        store_name = require_member_memory_store(
-            config, resolved_alias, require_directory=validate_memory_files
-        )
-
-    if execution_context is not None:
         kiro_agent = execution_context.template_id
         if execution_context.selection_kind == "member":
             kiro_agent = dispatch_kiro_agent(kiro_agent)
     else:
-        kiro_agent = passthrough or dispatch_kiro_agent(agent_cfg.kiro_agent)
-
-    # Build effective memory config via dict-level merge
-    store_cfg = config.memory_stores.get(store_name)
-    store_dict = _dc.asdict(store_cfg) if store_cfg else {}
-    top_level_memory = _dc.asdict(config.memory)
-    effective_memory = resolve_memory_store_config(top_level_memory, store_dict)
+        store_name = require_member_memory_store(
+            config, resolved_alias, require_directory=validate_memory_files
+        )
+        kiro_agent = dispatch_kiro_agent(agent_cfg.kiro_agent)
 
     return ResolvedBindings(
         execution_context=execution_context,
         workspace_dir=ws_dir,
         memory_store_name=store_name,
-        effective_memory_config=effective_memory,
+        effective_memory_config=_effective_memory(store_name),
         kiro_agent=kiro_agent,
         model=normalize_agent_model(agent_cfg.model),
         requested_resolved=requested_resolved,
         resolved_alias=resolved_alias,
-        selection_kind="template" if passthrough else "member",
+        selection_kind="member",
     )
 
 

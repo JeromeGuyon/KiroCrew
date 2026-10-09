@@ -855,11 +855,11 @@ async def api_members(request: web.Request) -> web.Response:
         row["last_active_ts"] = _recency_for_row(block, row.get("last_active_ts"))
 
     # When the PERSON last messaged each crew, in its DM or in a normal chat
-    # (`crew_recency`). `last_active_ts` above also moves for background work (a
-    # patrol turn, a reply), so the Crewmates list filters and orders by this one
-    # instead. 0 = never chatted. The default crew also owns a chat that picked
-    # no crew (recorded under "").
-    default_name = cfg.default_agent or "default"
+    # that explicitly picked it (`crew_recency`). `last_active_ts` above also
+    # moves for background work (a patrol turn, a reply), so the Crewmates list
+    # filters and orders by this one instead. 0 = never chatted. A plain chat
+    # that picked no crew runs the default TEMPLATE and is nobody's -- the
+    # `default` crewmate ranks by its own DM like every row.
 
     def _chat_recency() -> dict[str, float]:
         if not crew_recency.needs_seed():
@@ -873,10 +873,7 @@ async def api_members(request: web.Request) -> web.Response:
 
     recency = await asyncio.to_thread(_chat_recency)
     for row in rows:
-        ts = recency.get(row["name"], 0.0)
-        if row["name"] == default_name:
-            ts = max(ts, recency.get("", 0.0))
-        row["last_chat_ts"] = ts
+        row["last_chat_ts"] = recency.get(row["name"], 0.0)
 
     return web.json_response({"members": rows})
 

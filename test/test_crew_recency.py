@@ -45,8 +45,31 @@ def _home(tmp_path, _floor_monkeypatch):
 def test_record_round_trips_and_survives_a_reread():
     assert crew_recency.read_recency() == {}
     assert crew_recency.record_user_chat("radar", ts=1000.0) is True
-    assert crew_recency.record_user_chat("", ts=1200.0) is True
-    assert crew_recency.read_recency() == {"radar": 1000.0, "": 1200.0}
+    # A chat with no crewmate is nobody's: "" is refused, not recorded.
+    assert crew_recency.record_user_chat("", ts=1200.0) is False
+    assert crew_recency.read_recency() == {"radar": 1000.0}
+
+
+@pytest.mark.parametrize(
+    ("slot_agent", "kind", "mode", "expected"),
+    [
+        # A member DM thread is a chat with its crewmate -- the default's too.
+        ("radar", "member", "member", "radar"),
+        ("default", "member", "member", "default"),
+        # A plain session that explicitly picked a crewmate counts.
+        ("radar", "member", "", "radar"),
+        ("radar", "", "", "radar"),
+        # A template session is nobody's: the default template, or any other.
+        ("kirocrew", "template", "", ""),
+        ("", "", "", ""),
+        # The default alias outside a DM is indistinguishable from a pre-
+        # agent-less slot, so it is not credited.
+        ("default", "member", "", ""),
+        ("default", "", "", ""),
+    ],
+)
+def test_crewmate_for_user_chat(slot_agent, kind, mode, expected):
+    assert crew_recency.crewmate_for_user_chat(slot_agent, kind, mode, "default") == expected
 
 
 def test_a_burst_of_sends_writes_once_and_never_moves_backwards():
@@ -161,10 +184,28 @@ async def test_the_dashboard_user_sending_records_the_slot_crew(state):
 
 
 @pytest.mark.asyncio
-async def test_a_chat_with_no_crew_picked_records_the_default_crew_key(state):
+async def test_a_chat_with_no_crew_picked_records_nobody(state):
+    # The default TEMPLATE session: not the default crewmate's chat.
     state._slots["s1"].agent = ""
     recorder = await _send(state)
-    recorder.assert_called_once_with("")
+    recorder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_template_session_records_nobody(state):
+    state._slots["s1"].agent = "kirocrew"
+    state._slots["s1"].agent_kind = "template"
+    recorder = await _send(state)
+    recorder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_plain_slot_on_the_default_alias_records_nobody(state):
+    # Stamped by a legacy agent-less create; outside its DM thread it
+    # cannot be told from a plain chat.
+    state._slots["s1"].agent = "default"
+    recorder = await _send(state)
+    recorder.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -214,16 +255,17 @@ async def _roster(state, fake) -> dict[str, dict]:
 
 
 @pytest.mark.asyncio
-async def test_roster_ships_last_chat_ts_and_folds_the_default_key(tmp_path):
+async def test_roster_ships_last_chat_ts_and_never_folds_a_stray_default_key(tmp_path):
     state = _make_state(tmp_path)
     crew_recency.seed({})
     crew_recency.record_user_chat("radar", ts=1000.0)
-    crew_recency.record_user_chat("", ts=3000.0)
+    # A legacy file can still hold the "" key; it is nobody's now.
+    crew_recency.seed({"": 3000.0})
     crew_recency.record_user_chat("boss", ts=2000.0)
     rows = await _roster(state, _fake_config("radar", "boss", "quiet", default_agent="boss"))
     assert rows["radar"]["last_chat_ts"] == 1000.0
-    # The default crew owns a chat that picked no crew.
-    assert rows["boss"]["last_chat_ts"] == 3000.0
+    # The default crew ranks by its own DM, not by chats that picked no crew.
+    assert rows["boss"]["last_chat_ts"] == 2000.0
     assert rows["quiet"]["last_chat_ts"] == 0
 
 

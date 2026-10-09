@@ -8,6 +8,11 @@ conductor-dispatched worker, an app's own session). So the one place that
 knows a PERSON typed a message -- ``POST /api/chat`` without an app token,
 cron attestation -- records it here, keyed by crew name.
 
+What counts as talking to a crewmate is :func:`crewmate_for_user_chat`: its DM
+thread, or a plain session that explicitly picked it. A plain session with no
+crewmate picked runs the default TEMPLATE and is nobody's chat -- never the
+``default`` crewmate's.
+
 One small JSON file under the data home, ``{"version": 1, "crews": {name: ts}}``.
 Durable across restarts by construction. Best-effort throughout: a read fault
 reads as "nothing recorded", and a write fault never fails the send.
@@ -118,13 +123,38 @@ def seed(found: dict[str, float]) -> dict[str, float]:
         return dict(found)
 
 
+def crewmate_for_user_chat(
+    slot_agent: str, slot_agent_kind: str, slot_mode: str, default_alias: str
+) -> str:
+    """The crewmate a user's message in this slot is a chat WITH, or ``""``.
+
+    - A member DM thread (``slot_mode == "member"``) is a chat with its crewmate.
+    - A template selection (``slot_agent_kind == "template"``) is nobody's: the
+      session runs a template on the default folder and memory store.
+    - A plain session that explicitly picked a crewmate counts as talking to
+      it -- except the ``default`` alias (*default_alias*): before
+       every agent-less slot was stamped with that alias, so outside a
+      DM thread it cannot be told from a plain chat and is not credited.
+
+    Pure, so the cases are tested directly.
+    """
+    if not isinstance(slot_agent, str) or not slot_agent:
+        return ""
+    if slot_mode == "member":
+        return slot_agent
+    if slot_agent_kind == "template" or slot_agent == default_alias:
+        return ""
+    return slot_agent
+
+
 def record_user_chat(name: str, ts: float | None = None) -> bool:
     """Record that the user just sent *name* a message. Returns True on a write.
 
-    ``""`` is the default crew (a chat with no crew picked); the roster read
-    resolves it. Blocking file IO: call off the event loop. Never raises.
+    *name* is a crewmate (see :func:`crewmate_for_user_chat`); ``""`` is
+    refused, since a chat with no crewmate is nobody's. Blocking file IO: call
+    off the event loop. Never raises.
     """
-    if not isinstance(name, str):
+    if not isinstance(name, str) or not name:
         return False
     now = time.time() if ts is None else float(ts)
     try:

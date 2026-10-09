@@ -721,16 +721,28 @@ show refuses with `409 unreviewable_drift`, naming the file
 ## Crew records and binding
 
 A crew lives only in `config.json` under `agents.<name>`. It is not a kiro-cli
-agent file: `kiro_agent` points at one. `resolve_agent_bindings` turns a crew
-name into `ResolvedBindings`, in this order:
+agent file: `kiro_agent` points at one. A **session** is started from three
+things -- a template, a folder and a memory store -- and a crewmate pick is the
+shorthand that fills all three from its row. `resolve_agent_bindings` turns the
+selection into `ResolvedBindings`, in this order (#18328):
 
-1. the named crew, when it is a key of `config.agents`;
-2. otherwise a **materialized** kiro agent of that name (an app-registered agent
-   under the user's `~/.kiro/agents/`, or a project agent), which keeps
-   dispatching itself with the default workspace and Global Memory V1;
-3. otherwise `default_agent`, with `requested_resolved` set to `False` so a
-   caller never advertises a binding that is not running.
+1. the named crew, when it is a key of `config.agents` and the stated namespace
+   is not `template`: its template, workspace, memory store and model pin;
+2. otherwise a **template session** on `default_workspace` and Global Memory V1,
+   with no crewmate model pin and an empty `resolved_alias`: the **materialized**
+   kiro agent the name declares (an app-registered agent under the user's
+   `~/.kiro/agents/`, or a project agent), else the **default template**
+   (`default_template(config)`: `agent.default_agent`, `kirocrew` when unset).
+   A name that matched neither sets `requested_resolved` False so a caller never
+   advertises a binding that is not running; the default template itself always
+   resolves, even on a cold materialized snapshot.
 
+A plain session -- no name at all -- is therefore the default template, never
+the `default` crewmate: that row is one crewmate among the others, talked to in
+its DM thread, and may bind a different template than `agent.default_agent`.
+The top-level `default_agent` alias names the roster's default crewmate and is
+not consulted for a session that picked nobody; an agent-less slot create and an
+empty `/agent` switch stamp the default template in the `template` namespace.
 An unresolvable workspace falls back to `default_workspace`. Memory identity
 resolves exactly: the reserved `default` assistant uses Global Memory V1;
 existing V1 members keep their declared V1 binding.
@@ -741,7 +753,8 @@ unavailable without choosing Global. Rules and briefing remain usable without
 the learned database. Member isolation is routing for built-in tools, not secrecy
 against arbitrary code running as the same OS user.
 Selecting a member as `default_agent` preserves that member's memory version and
-binding. With no agents configured, the resolver returns the existing defaults.
+binding for its own DM thread and explicit picks. With no agents configured, the
+resolver returns the template session above.
 
 Member creation automatically provisions empty member memory. Members cannot
 choose a shared store or rebind their member store. Legacy members may continue
@@ -839,16 +852,12 @@ shows a single empty-state hero (ghost avatar, "No crewmates yet", one line,
 with crewmates and no `?member=`, the crewmate the user last chatted with opens
 (greatest `last_chat_ts`, see below; it is server-side, so a gateway restart or a
 new browser keeps it), else the remembered crewmate, else the most recently used
-one (greatest `last_active_ts`, ties keep roster order; never `default`). The
-built-in `default` row is remembered like any other when opened, with the
-roster's chat mark beside it (`mc-members-last-member-chat-mark` = the greatest
-crewmate `last_chat_ts` at that open); it is never ranked by its own
-`last_chat_ts` (that also moves for every plain chat that picked no crew, so it
-would win nearly always), and instead outranks the last-chatted crewmate exactly
-while no crewmate's `last_chat_ts` has moved past the mark (#17210). Both sides
-are the server's clock, so a remote dashboard compares the same. The mark is the
-user's own open (click or link): a restore re-reads it but never re-writes it.
-A roster holding only `default` still shows the hero. Below md
+one (greatest `last_active_ts`, ties keep roster order; never `default`, which
+the listing rule lists by name rather than by use). The built-in `default` row
+is remembered and ranked by its own `last_chat_ts` like any other (#17210,
+#18328): the server credits it only for its DM thread, never for a plain chat
+that picked nobody, so no client-side mark is needed. A roster holding only
+`default` still shows the hero. Below md
 nothing auto-opens — the roster is the page. A `?member=` naming a crewmate that
 is gone falls back the same way, under the existing swap notice. The page's copy
 says crewmate / Crewmates and "Built from"; the crew record, its API and its
@@ -862,8 +871,14 @@ the data home) when `POST /api/chat` is called by the dashboard user -- no app
 token, no cron attestation. Creating a crewmate counts too:
 `POST /api/agents` (owner-only, so never an app token) records the new crew
 unless the caller is an attested cron, so a crewmate the user just made is
-listed at once and sorts first. A chat that picked no crew is recorded under
-`""` and counts for the default crew. Crons, wakes, patrols,
+listed at once and sorts first. What counts as a chat WITH a crewmate is
+`crew_recency.crewmate_for_user_chat`: a member DM thread (`slot.mode ==
+"member"`), or a plain session that explicitly picked a crewmate -- except the
+`default` alias outside its DM, which a pre-#18328 agent-less create stamped on
+every plain slot and so cannot be told from a plain chat. A template session
+(the default template included) is nobody's chat and records nothing; `""` is
+refused by `record_user_chat`, and the roster never folds a stray `""` key into
+the default crew's row. Crons, wakes, patrols,
 sub-agents, conductor-dispatched workers and apps never write it, so a crew that
 only ran in the background or that an app drove is hidden -- the default crew
 and a dashboard-created crew included. The record is written when the send
