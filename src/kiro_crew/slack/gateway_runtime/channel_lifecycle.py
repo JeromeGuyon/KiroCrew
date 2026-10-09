@@ -271,6 +271,21 @@ async def _connect_slack(self: GatewayOrchestrator) -> bool:
     try:
         await self._socket_client.connect()
         print("👻 Kiro Crew gateway connected to Slack")
+        # Phase 3c-ii: connect each named-workspace socket too. A per-account
+        # failure is non-fatal and isolated — it disables THAT workspace only,
+        # leaving the default (and the rest) connected, mirroring how a default
+        # connect failure degrades to dashboard-only rather than crashing.
+        for _aid, _sock in getattr(self, "_slack_account_sockets", {}).items():
+            try:
+                await _sock.connect()
+                logger.info("slack: connected workspace account %r", _aid)
+            except Exception:
+                logger.warning(
+                    "slack: workspace account %r failed to connect — that "
+                    "workspace is disabled this session (others unaffected)",
+                    _aid,
+                    exc_info=True,
+                )
         return True
     except Exception as exc:
         # Keep a short reason for status surfaces (settings badge). Slack

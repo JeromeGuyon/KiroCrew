@@ -1088,11 +1088,11 @@ async def init_socket_mode(orch: GatewayOrchestrator, seen: SeenCache) -> None:
         orch.slack = None
         return
 
-    # Phase 3c-i (multi-workspace seam): the socket is built from the resolved
-    # per-account runtime entry rather than the raw orch._bot_token/_app_token.
-    # For the implicit 'default' account these hold exactly the top-level
-    # tokens, so this is behavior-identical today; it is the seam the N-socket
-    # loop (3c-ii) will iterate, one WSSocketModeClient per enabled account.
+    # Phase 3c-ii (multi-workspace): the default socket is built from its
+    # runtime entry (top-level tokens; byte-identical to before). A single
+    # _on_event listener serves EVERY account socket: it resolves which
+    # workspace an envelope arrived on from the receiving client, via the
+    # client->account_id map built below, so no payload team_id read is needed.
     _account = orch._slack_runtime.get("default")
     _bot_token = _account.bot_token if _account else orch._bot_token
     _app_token = _account.app_token if _account else orch._app_token
@@ -1101,8 +1101,14 @@ async def init_socket_mode(orch: GatewayOrchestrator, seen: SeenCache) -> None:
         app_token=_app_token,
         web_client=web_client,
     )
+    # client id -> account_id, so the shared listener can attribute an envelope
+    # to the workspace whose socket delivered it (phase 3c-ii routing).
+    orch._slack_socket_account = {id(orch._socket_client): "default"}
 
     async def _on_event(client: WSSocketModeClient, req: SocketModeRequest) -> None:
+        # Which workspace delivered this envelope (phase 3c-ii). Used for
+        # per-account authorization; 'default' preserves today's behavior.
+        account_id = orch._slack_socket_account.get(id(client), "default")  # noqa: F841
         # Reserve before the ACK's first suspension. A paused update returns
         # without acknowledging, so Slack retries the whole envelope on the new
         # gateway instead of accepting a card/command that this process cannot
@@ -1247,6 +1253,23 @@ async def init_socket_mode(orch: GatewayOrchestrator, seen: SeenCache) -> None:
         )
 
     orch._socket_client.socket_mode_request_listeners.append(_on_event)  # type: ignore[arg-type]
+
+    # Phase 3c-ii: mount one additional socket per ENABLED named workspace
+    # (both tokens resolved). Each shares the single _on_event listener; the
+    # client->account_id map lets that listener attribute every envelope. A
+    # named account whose authz was not registered at boot is skipped (defense
+    # in depth: no socket without an owner). Connect happens in _connect_slack.
+    orch._slack_account_sockets = {}
+    for _aid, _rt in orch._slack_runtime.items():
+        if _aid == "default" or not _rt.enabled:
+            continue
+        _wc = AsyncWebClient(token=_rt.bot_token)
+        _sock = WSSocketModeClient(app_token=_rt.app_token, web_client=_wc)
+        _sock.socket_mode_request_listeners.append(_on_event)  # type: ignore[arg-type]
+        orch._slack_account_sockets[_aid] = _sock
+        orch._slack_socket_account[id(_sock)] = _aid
+        logger.info("slack: mounted socket for workspace account %r", _aid)
+
     register_drain(_CHANNEL, lambda session_key: _drain_slack_queue(orch, session_key))
 
 

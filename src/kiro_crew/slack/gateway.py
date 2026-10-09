@@ -1100,6 +1100,12 @@ class GatewayOrchestrator:
         self._session_tasks: dict[str, asyncio.Task] = {}  # type: ignore[type-arg]
         self._pending_queue: dict[str, list] = {}
         self._socket_client: WSSocketModeClient | None = None
+        # Multi-workspace (phase 3c-ii): additional per-account Socket Mode
+        # clients (named slack.accounts workspaces), keyed by account_id, and a
+        # client-id -> account_id map so the shared listener attributes each
+        # inbound envelope. Empty for a single-workspace install.
+        self._slack_account_sockets: dict[str, WSSocketModeClient] = {}
+        self._slack_socket_account: dict[int, str] = {}
         self._wecom_client: "WeComClient | None" = None  # set by maybe_start_wecom
         # Registry-owned live channel handles ({channel_type: client}). The
         # per-channel _<type>_client attributes are legacy mirrors kept in sync
@@ -11294,6 +11300,9 @@ class GatewayOrchestrator:
             cleanup_tasks.append(self._dashboard_runner.cleanup())
         if self._socket_client:
             cleanup_tasks.append(asyncio.wait_for(self._socket_client.close(), timeout=1.0))
+        # Phase 3c-ii: close each named-workspace socket on the same budget.
+        for _sock in getattr(self, "_slack_account_sockets", {}).values():
+            cleanup_tasks.append(asyncio.wait_for(_sock.close(), timeout=1.0))
         # A reconnect the config applier scheduled must not race the close below
         # by starting a fresh transport into a gateway that is going away.
         for restart in list(self._channel_restart_tasks):
