@@ -3239,6 +3239,7 @@ async def create_session(
                     exc_info=True,
                 )
         state.push_slots_update()
+    _record_spawn(caller_key, slot)
     _audit(
         caller_session_key=caller_key,
         operation="create",
@@ -3582,6 +3583,7 @@ async def fork_session(
                 exc_info=True,
             )
     state.push_slots_update()
+    _record_spawn(caller_key, child)
     _audit(
         caller_session_key=caller_key,
         operation="fork",
@@ -3603,6 +3605,34 @@ async def fork_session(
         "messages": result.messages,
         "folder_id": child.folder_id or None,
     }
+
+
+def _record_spawn(caller_key: str, child: Any) -> None:
+    """Write the child's creating edge to the CREATOR's crew log (``session/spawned``).
+
+    The mint witness (``_lineage_minted``) lives only in this process, and the child's
+    own ``session/opened.parent`` is not written until its first turn, so a restart in
+    between used to lose the edge for good. The creator's log already exists, so the
+    edge is recorded there at once.
+
+    Taken from the values stamped at mint, and only when this process stamped them:
+    the creator sid frozen at mint names the log that was live when the child was
+    made. A creator with no ACP session yet has no log, and nothing is written -- the
+    child keeps today's behavior. Never raises: the create has already committed.
+    """
+    if not bool(getattr(child, "_lineage_minted", False)):
+        return
+    creator_slot = str(getattr(child, "_created_by", "") or "")
+    creator_sid = str(getattr(child, "_created_by_sid", "") or "")
+    child_slot = str(getattr(child, "key", "") or "")
+    if not creator_sid or not creator_slot or creator_slot != caller_key:
+        return
+    try:
+        crew_log_emit.on_session_spawned(
+            creator_sid, creator_slot=creator_slot, child_slot=child_slot
+        )
+    except Exception:
+        logger.warning("session_control: could not record session/spawned", exc_info=True)
 
 
 #: The refusal factory's product: it RETURNS the error to raise rather than raising,
