@@ -899,6 +899,32 @@ async def _pinned_kiro_cli(purpose: str) -> str | None:
     return pinned
 
 
+@dataclass
+class SlackAccountRuntime:
+    """Resolved runtime state for ONE Slack workspace (multi-workspace, phase 3a).
+
+    Built once at gateway construction, statically and with NO network I/O. One
+    entry per served workspace: the implicit ``default`` (top-level
+    credentials) plus every ``slack.accounts`` entry. ``team_id`` is empty until
+    connect time, when the off-loop ``auth.test`` fills it (phase 3c); nothing in
+    phase 3a consumes it yet.
+
+    ``enabled`` is True only when BOTH tokens resolved, mirroring the top-level
+    ``_slack_enabled`` rule, so a half-configured account is carried (for
+    round-trip + diagnostics) but will not later start a socket.
+    """
+
+    account_id: str
+    bot_token: str = ""
+    app_token: str = ""
+    owner_id: str = ""
+    team_id: str = ""
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.bot_token and self.app_token)
+
+
 class GatewayOrchestrator:
     """Manages the lifecycle of all gateway services.
 
@@ -969,6 +995,19 @@ class GatewayOrchestrator:
         }
         self._open_channels: set[str] = set(cfg.slack.open_channels)
         self._slack_enabled = bool(self._app_token and self._bot_token)
+        # Phase 3a (multi-workspace): a static per-account runtime map resolved
+        # once here with NO network I/O. The 'default' account mirrors the
+        # top-level credentials already loaded above; each slack.accounts entry
+        # resolves its tokens + owner through cfg.resolve_slack_account (which
+        # reads the per-account credential first, then the account config). The
+        # team_id stays empty at construction and is filled later, off-loop, at
+        # connect time (the auth.test that validate_enterprise already performs
+        # for the default account). This map is NOT yet consumed by the socket
+        # path — the single default socket is unchanged — so building it changes
+        # no runtime behavior; it is the foundation phases 3b/3c read from.
+        self._slack_runtime: dict[str, SlackAccountRuntime] = self._build_slack_runtime(
+            cfg, creds
+        )
         # One hoist per channel, in roster order. Each reads the credential
         # store + that channel's config section into the ``_<channel>_*``
         # attributes its ``maybe_start_*`` factory consumes. Kept as methods so
@@ -13964,6 +14003,35 @@ class GatewayOrchestrator:
         self._wecom_bot_id = creds.get(CRED_WECOM_BOT_ID, "")
         self._wecom_secret = creds.get(CRED_WECOM_SECRET, "")
         self._wecom_enabled = bool(cfg.wecom.enabled and self._wecom_bot_id and self._wecom_secret)
+
+    def _build_slack_runtime(
+        self, cfg: KiroCrewConfig, creds: Mapping[str, str]
+    ) -> dict[str, "SlackAccountRuntime"]:
+        """Resolve the per-workspace Slack runtime map (phase 3a; no network I/O).
+
+        One ``SlackAccountRuntime`` per served workspace: the implicit
+        ``default`` (top-level credentials already loaded) plus every
+        ``slack.accounts`` entry, each resolved through
+        ``cfg.resolve_slack_account`` (per-account credential first, then the
+        account config, owner falling back to the global owner). ``team_id`` is
+        left empty and filled later at connect time.
+
+        ``creds`` is reused (not re-read) so this stays pure and allocation-only
+        — safe to call from ``__init__``. The ``default`` entry is always
+        present even when its tokens are empty, so callers can treat the map as
+        the single source of truth for "which workspaces exist".
+        """
+        runtime: dict[str, SlackAccountRuntime] = {}
+        account_ids = ["default", *cfg.slack.accounts.keys()]
+        for account_id in account_ids:
+            resolved = cfg.resolve_slack_account(account_id, dict(creds))
+            runtime[account_id] = SlackAccountRuntime(
+                account_id=account_id,
+                bot_token=resolved["bot_token"],
+                app_token=resolved["app_token"],
+                owner_id=resolved["owner_id"],
+            )
+        return runtime
 
     def _hoist_telegram(self, cfg: KiroCrewConfig, creds: Mapping[str, str]) -> None:
         # Telegram — the TELEGRAM_BOT_TOKEN credential (env/.env) overrides
