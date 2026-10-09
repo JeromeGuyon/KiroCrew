@@ -80,3 +80,19 @@ def test_set_account_authz_rejects_default():
     # 'default' is governed by the globals, not the registry — nothing stored.
     assert "default" not in h._account_authz
     assert h.is_owner("Uhacker") is False
+
+
+def test_route_gate_predicate_is_account_scoped():
+    # _route_message now calls is_allowed_user(sender_id, account_id). This
+    # pins the behavioral contract that gate relies on: a member of workspace
+    # 'acme' is admitted for account_id='acme' and rejected for 'default'.
+    h._owner_id = "Udefault"
+    h._allowed_users = {"Udefault"}
+    h.set_account_authz("acme", owner_id="Uacme", allowed_users={"Ualice"})
+    # the exact call shape _route_message makes:
+    assert h.is_allowed_user("Ualice", "acme") is True
+    assert h.is_allowed_user("Ualice", "default") is False
+    assert h.is_allowed_user("Ualice") is False
+    # and the default workspace is unaffected by the acme registry
+    assert h.is_allowed_user("Udefault", "default") is True
+    assert h.is_allowed_user("Udefault", "acme") is False

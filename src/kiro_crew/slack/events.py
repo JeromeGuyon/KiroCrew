@@ -1108,7 +1108,7 @@ async def init_socket_mode(orch: GatewayOrchestrator, seen: SeenCache) -> None:
     async def _on_event(client: WSSocketModeClient, req: SocketModeRequest) -> None:
         # Which workspace delivered this envelope (phase 3c-ii). Used for
         # per-account authorization; 'default' preserves today's behavior.
-        account_id = orch._slack_socket_account.get(id(client), "default")  # noqa: F841
+        account_id = orch._slack_socket_account.get(id(client), "default")
         # Reserve before the ACK's first suspension. A paused update returns
         # without acknowledging, so Slack retries the whole envelope on the new
         # gateway instead of accepting a card/command that this process cannot
@@ -1157,7 +1157,7 @@ async def init_socket_mode(orch: GatewayOrchestrator, seen: SeenCache) -> None:
         if event_type == "app_home_opened":
             user = event.get("user")
             if event.get("tab") == "home" and user:
-                if is_allowed_user(user):
+                if is_allowed_user(user, account_id):
                     sel().log_api_access(
                         caller=user,
                         operation="slack.home_tab",
@@ -1250,6 +1250,7 @@ async def init_socket_mode(orch: GatewayOrchestrator, seen: SeenCache) -> None:
             seen,
             is_mention=(event_type == "app_mention"),
             from_trusted_bot=_from_trusted_bot,
+            account_id=account_id,
         )
 
     orch._socket_client.socket_mode_request_listeners.append(_on_event)  # type: ignore[arg-type]
@@ -2398,8 +2399,16 @@ async def _route_message(
     seen: SeenCache,
     is_mention: bool = False,
     from_trusted_bot: bool = False,
+    account_id: str = "default",
 ) -> None:
-    """Validate, dedup, check activation mode, and dispatch an incoming Slack message."""
+    """Validate, dedup, check activation mode, and dispatch an incoming Slack message.
+
+    *account_id* is the workspace whose socket delivered this event
+    (multi-workspace, phase 3d). It selects which workspace's owner + allow-list
+    the authorization gate consults, so a user authorized on one workspace is
+    not implicitly authorized on another. ``"default"`` is the implicit
+    top-level account and preserves the single-workspace behavior exactly.
+    """
     sender_id = event.get("user", "") or (event.get("bot_id", "") if from_trusted_bot else "")
     channel = event.get("channel", "")
     text = event.get("text", "")
@@ -2478,7 +2487,7 @@ async def _route_message(
     _turn_capped = from_trusted_bot and _trusted_bot_turns.count(_thread_key) >= max(
         1, slack_cfg(orch).slack.trusted_bot_turn_limit
     )
-    _owner_authorized = is_allowed_user(sender_id)
+    _owner_authorized = is_allowed_user(sender_id, account_id)
     _trusted_bot_admitted = (
         from_trusted_bot
         and not _turn_capped
