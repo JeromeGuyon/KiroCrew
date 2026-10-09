@@ -2168,6 +2168,88 @@ class SessionConfig:
 
 
 @dataclass
+class SlackAccountConfig:
+    """One Slack workspace served by this gateway.
+
+    A single install reaches N independent workspaces (NOT an Enterprise Grid
+    org) by listing one account per workspace under ``slack.accounts``. Each
+    account carries its OWN credentials, owner and authorization scope, so an
+    owner of one workspace has no authority over another. The ``bot_token`` /
+    ``app_token`` here are optional overrides; the preferred source is the
+    per-account credential ``SLACK_BOT_TOKEN__<account_id>`` /
+    ``SLACK_APP_TOKEN__<account_id>`` (see loader), so the raw tokens need not
+    live in the config file.
+
+    The gateway's top-level ``slack.bot_token`` / ``app_token`` / owner remain
+    the implicit ``default`` account, so an existing single-workspace install
+    is unchanged and need not define ``accounts`` at all.
+    """
+
+    owner_id: str = field(
+        default="",
+        metadata=_meta(
+            "Owner ID",
+            "Slack user ID that owns THIS workspace (full control on this "
+            "workspace only). Empty inherits the gateway's global owner.",
+            tags=["slack"],
+        ),
+    )
+    bot_token: str = field(
+        default="",
+        metadata=_meta(
+            "Bot Token",
+            "Bot token for this workspace. Prefer the per-account credential "
+            "SLACK_BOT_TOKEN__<account_id> over storing it here.",
+            tags=["slack"],
+            sensitive=True,
+        ),
+    )
+    app_token: str = field(
+        default="",
+        metadata=_meta(
+            "App Token",
+            "App-level (Socket Mode) token for this workspace. Prefer the "
+            "per-account credential SLACK_APP_TOKEN__<account_id>.",
+            tags=["slack"],
+            sensitive=True,
+        ),
+    )
+    allowed_users: list[dict] = field(
+        default_factory=list,
+        metadata=_meta(
+            "Allowed Users",
+            "Users allowed to interact on THIS workspace. Each entry: "
+            "{slack_id, name}. This workspace's owner is always allowed.",
+            tags=["slack"],
+        ),
+    )
+    tracking_channels: list[dict] = field(
+        default_factory=list,
+        metadata=_meta(
+            "Tracking Channels",
+            "Channels monitored on THIS workspace. Each entry: {channel_id, name}.",
+            tags=["slack"],
+        ),
+    )
+    open_channels: list[str] = field(
+        default_factory=list,
+        metadata=_meta(
+            "Open Channels",
+            "Channel IDs on THIS workspace where all users are authorized.",
+            tags=["slack"],
+        ),
+    )
+    session_folder: str = field(
+        default="",
+        metadata=_meta(
+            "Session Folder",
+            "Optional sidebar folder for sessions started on this workspace.",
+            tags=["slack"],
+        ),
+    )
+
+
+@dataclass
 class SlackConfig:
     allowed_users: list[dict] = field(
         default_factory=list,
@@ -2239,6 +2321,21 @@ class SlackConfig:
             "Allowed Enterprise IDs",
             "Slack Enterprise Grid org IDs to allow. Empty list allows all orgs (default-open).",
             tags=["slack"],
+        ),
+    )
+    accounts: dict[str, "SlackAccountConfig"] = field(
+        default_factory=dict,
+        metadata=_meta(
+            "Accounts",
+            "Additional Slack workspaces served by this gateway, keyed by a "
+            "short account id ([A-Za-z0-9_-]). Each value is a SlackAccountConfig "
+            "with its own owner, credentials and authorization scope. The "
+            "gateway's top-level bot_token/app_token/owner remain the implicit "
+            "'default' account, so an existing single-workspace install needs no "
+            "accounts block. Workspaces are INDEPENDENT (not an Enterprise Grid "
+            "org): routing is 1:1 team_id -> account.",
+            tags=["slack"],
+            restart=True,
         ),
     )
     reactions: dict[str, str | None] = field(
@@ -5639,6 +5736,56 @@ def _parse_telegram_accounts(raw: object) -> dict[str, "TelegramAccountConfig"]:
             allow_forum=account.read("allow_forum", _safe_bool),
             allowed_forum_chat_ids=_coerce_int_ids(account.get("allowed_forum_chat_ids")),
             soft_threshold_pct=account.read("soft_threshold_pct", _threshold_pct),
+        )
+    return out
+
+
+def _parse_slack_accounts(raw: object) -> dict[str, "SlackAccountConfig"]:
+    """Parse the ``slack.accounts`` map (additional Slack workspaces).
+
+    Unlike the deprecated telegram.accounts, these are ACTIVE: each entry is a
+    workspace this gateway serves. A token is NOT required in the config,
+    because the preferred source is the per-account credential
+    ``SLACK_BOT_TOKEN__<account_id>`` / ``SLACK_APP_TOKEN__<account_id>``; an
+    entry with neither a config token nor a credential simply fails to start a
+    socket later (handled at connection time), but is still parsed and
+    round-tripped so a hand-edited config is never silently erased.
+
+    Fail-safe like the telegram parser: a non-dict map yields ``{}``, and an
+    entry is skipped only when its id is malformed (not ``[A-Za-z0-9_-]+``) or
+    its value is not a dict. The id shape matches the credential-suffix charset
+    so an account id can be embedded verbatim in an env var name.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, SlackAccountConfig] = {}
+    for account_id, acct_data in raw.items():
+        if not isinstance(account_id, str) or not isinstance(acct_data, dict):
+            continue
+        # Same id shape as the credential suffix: alphanumeric plus dash and
+        # underscore, never empty. 'default' is reserved for the implicit
+        # top-level account and is rejected here to avoid two sources for it.
+        if not account_id or not account_id.replace("-", "").replace("_", "").isalnum():
+            continue
+        if account_id == "default":
+            continue
+        account = SectionReader(SlackAccountConfig, acct_data)
+        out[account_id] = SlackAccountConfig(
+            owner_id=str(account.get("owner_id") or "").strip(),
+            bot_token=str(account.get("bot_token") or "").strip(),
+            app_token=str(account.get("app_token") or "").strip(),
+            allowed_users=[
+                u
+                for u in account.get("allowed_users")
+                if isinstance(u, dict) and u.get("slack_id")
+            ],
+            tracking_channels=[
+                c
+                for c in account.get("tracking_channels")
+                if isinstance(c, dict) and c.get("channel_id")
+            ],
+            open_channels=[c for c in account.get("open_channels") if isinstance(c, str)],
+            session_folder=_coerce_session_folder(account.get("session_folder")),
         )
     return out
 

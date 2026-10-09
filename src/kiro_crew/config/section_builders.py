@@ -74,6 +74,7 @@ from kiro_crew.config.sections import (
     FeishuConfig,
     IMessageConfig,
     SectionReader,
+    SlackAccountConfig,
     SlackConfig,
     SttConfig,
     TeamsConfig,
@@ -88,6 +89,7 @@ from kiro_crew.config.sections import (
     _coerce_session_folder,
     _coerce_str_ids,
     _coerce_whatsapp_groups,
+    _parse_slack_accounts,
     _parse_telegram_accounts,
     _threshold_pct,
     _validate_telegram_activation,
@@ -547,6 +549,14 @@ def _build_slack_config(slack_data: dict) -> SlackConfig:
             for e in section.get("allowed_enterprise_ids")
             if isinstance(e, str) and (e.startswith("E") or e.startswith("T"))
         ],
+        # Additional independent workspaces. The parser reads raw JSON entries,
+        # so it is handed only a stored value; an omitted key is the field
+        # default (empty map) as built.
+        accounts=(
+            _parse_slack_accounts(slack_data["accounts"])
+            if isinstance(slack_data, dict) and "accounts" in slack_data
+            else section.default("accounts")
+        ),
         reactions={
             k: v
             for k, v in _safe_dict(section.get("reactions")).items()
