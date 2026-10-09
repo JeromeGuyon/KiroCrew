@@ -370,6 +370,7 @@ describe('SlackPanel save payload', () => {
       command: 'crew',
       allowed_users: [],
       allowed_enterprise_ids: ['E000ONE'],
+      accounts: [],
       reactions_enabled: true,
       show_thinking: true,
       session_folder: '',
@@ -614,5 +615,30 @@ describe('SlackPanel save failure', () => {
     fireEvent.click(saveBtn())
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
     expect(within(screen.getByRole('button', { name: 'Saving…' })).queryByRole('alert')).toBeNull()
+  })
+
+  it('renders a configured additional workspace with its token badges', async () => {
+    seed({
+      accounts: [
+        { account_id: 'acme', owner_id: 'U000ACME', allowed_users: ['U000AL'], bot_token_set: true, app_token_set: false },
+      ],
+    })
+    await hydrated()
+    expect(screen.getByText('acme')).toBeInTheDocument()
+    expect(screen.getByText('bot ✓')).toBeInTheDocument()
+    expect(screen.getByText('app —')).toBeInTheDocument()
+  })
+
+  it('adds a new workspace and includes it in the save payload', async () => {
+    const { save } = seed()
+    await hydrated()
+    fireEvent.change(screen.getByPlaceholderText('e.g. acme'), { target: { value: 'globex' } })
+    fireEvent.click(screen.getByRole('button', { name: /Add workspace/ }))
+    expect(screen.getByText('globex')).toBeInTheDocument()
+    fireEvent.click(saveBtn())
+    await screen.findByText('Saved.', undefined, { timeout: 5_000 })
+    expect(save.mock.calls[0][0]).toMatchObject({
+      accounts: [{ account_id: 'globex', owner_id: '', allowed_users: [] }],
+    })
   })
 })

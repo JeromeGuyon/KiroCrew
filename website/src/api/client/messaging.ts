@@ -7,6 +7,18 @@
 
 import type { ClientTransport } from './transport'
 
+/** One additional Slack workspace (multi-workspace), as summarized by GET. */
+export interface SlackAccountSummary {
+  account_id: string
+  owner_id: string
+  /** Member IDs (besides this workspace's owner) allowed on this workspace. */
+  allowed_users: string[]
+  /** Whether a bot token resolved for this account (never the token itself). */
+  bot_token_set: boolean
+  /** Whether an app token resolved for this account. */
+  app_token_set: boolean
+}
+
 /** Slack config as returned by GET /api/slack/config (secrets masked). */
 export interface SlackConfigData {
   connected: boolean
@@ -22,6 +34,8 @@ export interface SlackConfigData {
   /** Slack member IDs (besides the owner) allowed to invoke the agent. */
   allowed_users: string[]
   allowed_enterprise_ids: string[]
+  /** Additional workspaces served by this gateway (multi-workspace). */
+  accounts?: SlackAccountSummary[]
   reactions_enabled: boolean
   show_thinking: boolean
   /** Sidebar folder this channel's sessions are filed into ("" = off, the default). */
@@ -39,6 +53,9 @@ export interface SlackConfigSave {
   /** Slack member IDs (besides the owner) allowed to invoke the agent. */
   allowed_users: string[]
   allowed_enterprise_ids: string[]
+  /** Additional workspaces (multi-workspace). Tokens are set out-of-band via
+   *  the per-account credential path, never in this body. */
+  accounts: Array<{ account_id: string; owner_id: string; allowed_users: string[] }>
   reactions_enabled: boolean
   show_thinking: boolean
   /** Sidebar folder this channel's sessions are filed into ("" = off, the default). */

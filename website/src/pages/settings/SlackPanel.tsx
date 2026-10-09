@@ -22,6 +22,8 @@ type Draft = {
   command: string
   allowed_users: string[]
   allowed_enterprise_ids: string[]
+  /** Additional workspaces (multi-workspace); tokens are set out-of-band. */
+  accounts: Array<{ account_id: string; owner_id: string; allowed_users: string[]; bot_token_set: boolean; app_token_set: boolean }>
   reactions_enabled: boolean
   show_thinking: boolean
   /** Whether Slack files its sessions in a folder at all (off = unfiled). */
@@ -38,6 +40,13 @@ function draftFrom(c: SlackConfigData): Draft {
     command: c.command,
     allowed_users: [...(c.allowed_users ?? [])],
     allowed_enterprise_ids: [...c.allowed_enterprise_ids],
+    accounts: (c.accounts ?? []).map(a => ({
+      account_id: a.account_id,
+      owner_id: a.owner_id,
+      allowed_users: [...(a.allowed_users ?? [])],
+      bot_token_set: a.bot_token_set,
+      app_token_set: a.app_token_set,
+    })),
     reactions_enabled: c.reactions_enabled,
     show_thinking: c.show_thinking,
     // A configured name IS the on-state — the backend has one field, where ""
@@ -144,6 +153,86 @@ export function TagListEditor({ label, description, values, placeholder, onChang
       )}
       {/* Client-side validation only ("X is not a valid ID") — there is nothing
           for the agent to diagnose, so no hand-off. */}
+      <ErrorNotice message={err} variant="inline" />
+    </div>
+  )
+}
+
+/** Editor for additional Slack workspaces (multi-workspace).
+ *
+ * Each row is one workspace: its account id, its own owner, and its own
+ * allow-list. Tokens are NOT edited here — they are provisioned out-of-band as
+ * per-account credentials (SLACK_BOT_TOKEN__<account_id>), so each row shows a
+ * read-only badge of whether its bot/app token resolved rather than a secret
+ * field. Adding or removing a workspace needs a gateway restart (the save
+ * surfaces the hint).
+ */
+function SlackAccountsEditor({ accounts, onChange, readOnly }: {
+  accounts: Draft['accounts']
+  onChange: (next: Draft['accounts']) => void
+  readOnly?: boolean
+}) {
+  const [newId, setNewId] = useState('')
+  const [err, setErr] = useState('')
+  const addAccount = () => {
+    const id = newId.trim()
+    if (!id) return
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) { setErr('Account id: letters, digits, - and _ only'); return }
+    if (id === 'default') { setErr("'default' is reserved for the top-level workspace"); return }
+    if (accounts.some(a => a.account_id === id)) { setErr(`Workspace ${id} already exists`); return }
+    onChange([...accounts, { account_id: id, owner_id: '', allowed_users: [], bot_token_set: false, app_token_set: false }])
+    setNewId('')
+    setErr('')
+  }
+  const updateAccount = (id: string, patch: Partial<Draft['accounts'][number]>) =>
+    onChange(accounts.map(a => (a.account_id === id ? { ...a, ...patch } : a)))
+  const removeAccount = (id: string) => onChange(accounts.filter(a => a.account_id !== id))
+  return (
+    <div data-setting-label="Additional workspaces" className="flex flex-col gap-2 py-1.5">
+      <span className="text-[13px] font-semibold text-text">Additional workspaces</span>
+      <div className="text-[12px] text-muted">
+        Connect more Slack workspaces, each with its own owner and allow-list. Set each
+        workspace's bot/app tokens as credentials named <span className="font-mono">SLACK_BOT_TOKEN__&lt;id&gt;</span> /
+        <span className="font-mono"> SLACK_APP_TOKEN__&lt;id&gt;</span> (hex-encoded id), then restart the gateway.
+      </div>
+      {accounts.map(a => (
+        <div key={a.account_id} className="flex flex-col gap-1.5 rounded-md border border-border bg-bg-elevated p-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] font-semibold font-mono text-text">{a.account_id}</span>
+            <span className="flex items-center gap-2">
+              <span className={`text-[11px] ${a.bot_token_set ? 'text-ok' : 'text-warn'}`}>bot {a.bot_token_set ? '✓' : '—'}</span>
+              <span className={`text-[11px] ${a.app_token_set ? 'text-ok' : 'text-warn'}`}>app {a.app_token_set ? '✓' : '—'}</span>
+              {!readOnly && (
+                <button type="button" onClick={() => removeAccount(a.account_id)}
+                  className="text-muted hover:text-danger transition-colors" aria-label={`Remove workspace ${a.account_id}`}>
+                  <X size={13} />
+                </button>
+              )}
+            </span>
+          </div>
+          <label className="text-[12px] text-muted">Owner ID</label>
+          <Input value={a.owner_id} placeholder="U0123ABC456" className="font-mono"
+            readOnly={readOnly}
+            onChange={e => updateAccount(a.account_id, { owner_id: e.target.value })} />
+          <TagListEditor
+            label="Allowed users"
+            description="Member IDs allowed on this workspace (besides its owner)."
+            values={a.allowed_users}
+            placeholder="U0456DEF789"
+            onChange={v => updateAccount(a.account_id, { allowed_users: v })}
+            validate={v => /^[UW][A-Z0-9]{1,19}$/.test(v)}
+            readOnly={readOnly}
+          />
+        </div>
+      ))}
+      {accounts.length === 0 && readOnly && <div className="text-[12px] text-muted">None</div>}
+      {!readOnly && (
+        <div className="flex items-center gap-2">
+          <Input value={newId} placeholder="e.g. acme" className="min-w-0 flex-1 font-mono"
+            onChange={e => { setNewId(e.target.value); setErr('') }} />
+          <Btn onClick={addAccount} disabled={!newId.trim()} className="shrink-0"><Plus size={13} /> Add workspace</Btn>
+        </div>
+      )}
       <ErrorNotice message={err} variant="inline" />
     </div>
   )
@@ -258,6 +347,12 @@ export function SlackPanel() {
       command: draft.command.trim(),
       allowed_users: draft.allowed_users,
       allowed_enterprise_ids: draft.allowed_enterprise_ids,
+      // Only the editable fields go up; bot/app_token_set are display-only.
+      accounts: draft.accounts.map(a => ({
+        account_id: a.account_id,
+        owner_id: a.owner_id.trim(),
+        allowed_users: a.allowed_users,
+      })),
       reactions_enabled: draft.reactions_enabled,
       show_thinking: draft.show_thinking,
       // Off sends "" (the field's off-state); on with a blank name falls back
@@ -416,6 +511,11 @@ export function SlackPanel() {
             placeholder={i18nT('pages.settings.slackPanel.e0123abc456')}
             onChange={v => upd({ allowed_enterprise_ids: v })}
             validate={v => /^[ET][A-Z0-9]+$/.test(v)}
+            readOnly={ro}
+          />
+          <SlackAccountsEditor
+            accounts={draft.accounts}
+            onChange={v => upd({ accounts: v })}
             readOnly={ro}
           />
         </SettingsCard>
