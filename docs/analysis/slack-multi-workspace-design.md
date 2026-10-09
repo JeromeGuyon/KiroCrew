@@ -103,6 +103,30 @@ SlackAccountConfig:
 >   chemin que les autres (dogfood du path multi-compte).
 > - **3d (routage entrant, = ancienne Phase 4).** `team_id` d'enveloppe →
 >   `account_id` (fail-closed si inconnu). Propager `account_id` dans
+
+(voir aussi les décisions « pas de changement nécessaire » ci-dessous)
+
+## Décisions d'investigation (2026-10-09) — pas de changement nécessaire
+
+Deux items du plan se sont révélés inutiles après vérification du code — documentés
+ici pour qu'on ne les ré-ouvre pas :
+
+1. **Session key `(account_id, channel, thread_ts)` — NON nécessaire.** Les IDs
+   Slack de canal/DM (`C…`/`D…`) sont **globalement uniques** : un même ID ne peut
+   pas appartenir à deux workspaces, et un `thread_ts`/`msg_ts` est unique dans son
+   canal. La clé actuelle (`flat_dm_session_key(channel, …)` ou `thread_ts`/`msg_ts`)
+   ne peut donc PAS entrer en collision entre workspaces. Ajouter `account_id` à la
+   clé n'apporterait rien et ferait courir un risque réel : chaque site qui construit
+   ou parse la clé (stop, dequeue, dashboard, dispatch) devrait matcher, et une
+   incohérence laisserait des sessions orphelines. Laissé tel quel délibérément.
+
+2. **Prompt owner par compte (`_maybe_prompt_owner`) — rien à faire.** Dans ce build,
+   `_maybe_prompt_owner` est déjà un **no-op** : les prompts Allow/Deny à l'arrivée
+   d'un membre dans un canal tracké sont désactivés (multi-user channel-join
+   disabled). Il n'y a donc aucune autorité `default` à rendre account-aware ; le
+   chemin est mort. (Si ces prompts étaient réactivés un jour, il faudrait alors leur
+   passer l'`account_id` du socket, comme pour `is_allowed_user`.)
+
 >   handler/stream/interactions. Session key = `(account_id, channel, thread_ts)`.
 >
 > Les anciennes Phases 4 et 5 ci-dessous sont ABSORBÉES par 3b/3d ; conservées
